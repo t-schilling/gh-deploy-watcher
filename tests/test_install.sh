@@ -38,7 +38,7 @@ assert_true() { # description, command...
   if "$@"; then ok; else bad "$d"; fi
 }
 
-REAL_UTILS="ln mkdir chmod rm readlink dirname"
+REAL_UTILS="ln mkdir chmod rm readlink dirname find touch"
 
 # new_case <name> [stubs-to-omit...]: builds $CASE with home/, bin/, repo/, apps/
 new_case() {
@@ -64,6 +64,14 @@ new_case() {
   stub fzf 'exit 0'
   stub defaults '[ -n "${STUB_SWIFTBAR_DIR:-}" ] && { echo "$STUB_SWIFTBAR_DIR"; exit 0; }; exit 1'
   mkdir -p "$CASE/apps/SwiftBar.app"
+  # Window build: stub swift/xcrun, plus a fake ui-shell/build.sh that calls the stub swift
+  # and drops a fake executable where the real build.sh puts it. No real Swift build ever runs.
+  stub swift '[ "${STUB_SWIFT_RC:-0}" -eq 0 ] || { echo "swift: boom" >&2; exit "$STUB_SWIFT_RC"; }; exit 0'
+  stub xcrun 'echo /fake/sdk'
+  mkdir -p "$REPO/ui-shell/Sources"
+  printf 'x\n' > "$REPO/ui-shell/Sources/main.swift"
+  printf '#!/bin/sh\nswift build -c release || exit 1\nd="$(cd "$(dirname "$0")/.." && pwd)/build/GhDeployWatcher.app/Contents/MacOS"\nmkdir -p "$d"\nprintf "#!/bin/sh\\n" > "$d/GhDeployWatcher"\nchmod +x "$d/GhDeployWatcher"\n' > "$REPO/ui-shell/build.sh"
+  touch -t 202001010000 "$REPO/ui-shell/build.sh" "$REPO/ui-shell/Sources/main.swift"
   local o
   for o in "$@"; do
     case "$o" in
@@ -310,6 +318,81 @@ assert_rc 0 "help"
 assert_out_has "--dry-run" "help lists flags"
 run_install --bogus
 assert_rc_nonzero "unknown flag"
+
+# 14. native window step
+APP_EXE() { printf '%s/build/GhDeployWatcher.app/Contents/MacOS/GhDeployWatcher' "$REPO"; }
+count_swift() { grep -c '^swift build' "$LOG" 2>/dev/null || true; }
+
+new_case win_build
+run_install --yes --plugin-dir "$PLUGINS"
+assert_rc 0 "window build"
+assert_true "app built" test -x "$(APP_EXE)"
+assert_true "swift ran once" test "$(count_swift)" = 1
+assert_out_has "window: built" "summary says built"
+run_install --yes --plugin-dir "$PLUGINS"
+assert_rc 0 "window second run"
+assert_true "swift not re-run" test "$(count_swift)" = 1
+assert_out_has "window: already built" "summary says already built"
+
+# touching a file under ui-shell/ triggers a rebuild
+touch -t 202101010000 "$(APP_EXE)"
+touch "$REPO/ui-shell/Sources/main.swift"
+run_install --yes --plugin-dir "$PLUGINS"
+assert_rc 0 "window rebuild"
+assert_true "swift ran again" test "$(count_swift)" = 2
+assert_out_has "window: built" "rebuild says built"
+
+# files under ui-shell/.build do not trigger a rebuild
+mkdir -p "$REPO/ui-shell/.build"
+touch "$REPO/ui-shell/.build/artifact"
+run_install --yes --plugin-dir "$PLUGINS"
+assert_true ".build ignored" test "$(count_swift)" = 2
+assert_out_has "window: already built" ".build ignored says already built"
+
+new_case win_noswift swift
+run_install --yes --plugin-dir "$PLUGINS"
+assert_rc 0 "no swift"
+assert_out_has "window: skipped" "no swift skipped"
+assert_out_has "browser" "no swift mentions browser"
+assert_true "no app without swift" test ! -e "$(APP_EXE)"
+
+new_case win_nosdk xcrun
+run_install --yes --plugin-dir "$PLUGINS"
+assert_rc 0 "no sdk"
+assert_out_has "window: skipped" "no sdk skipped"
+assert_log_lacks "^swift " "swift not called without sdk"
+
+new_case win_fail
+EXTRA_ENV="STUB_SWIFT_RC=1" run_install --yes --plugin-dir "$PLUGINS"
+assert_rc 0 "failing swift does not fail install"
+assert_out_has "will open in the browser" "failure note"
+assert_out_has "window: skipped" "failure summary skipped"
+assert_true "symlink still created" test -L "$PLUGINS/$TARGET_NAME"
+
+new_case win_flag
+run_install --yes --no-window --plugin-dir "$PLUGINS"
+assert_rc 0 "--no-window"
+assert_log_lacks "^swift " "--no-window never calls swift"
+assert_out_has "window: skipped" "--no-window skipped"
+assert_out_has "--no-window" "--no-window reason"
+
+new_case win_dry
+run_install --dry-run --plugin-dir "$PLUGINS"
+assert_rc 0 "dry-run window"
+assert_out_has "would run:" "dry-run lists step"
+assert_out_has "build.sh" "dry-run names build.sh"
+assert_log_lacks "^swift " "dry-run builds nothing"
+assert_true "dry-run no build dir" test ! -e "$REPO/build"
+
+new_case win_uninstall
+run_install --yes --plugin-dir "$PLUGINS"
+run_install --uninstall --plugin-dir "$PLUGINS"
+assert_rc 0 "uninstall after build"
+assert_true "uninstall leaves build/" test -x "$(APP_EXE)"
+
+new_case win_help
+run_install --help
+assert_out_has "--no-window" "help lists --no-window"
 
 printf '%d passed, %d failed\n' "$PASSES" "$FAILS"
 [ "$FAILS" -eq 0 ]
