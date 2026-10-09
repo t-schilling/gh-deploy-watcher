@@ -183,7 +183,7 @@ class WizardAddTests(WizardBase):
                 return super().__call__(args)
         gh = Flaky(["acme/new", "acme/other"], WFS)
         picker = Picks(lambda o, p: list(o), defaults)
-        res, _ = self.run_wiz(Config(), gh, picker, ["1", "4"])
+        res, _ = self.run_wiz(Config(), gh, picker, ["1", "", "", "4"])
         self.assertEqual(res.repos, [])
         self.assertTrue(any("boom" in l for l in self.lines))
 
@@ -282,7 +282,7 @@ class PickTests(unittest.TestCase):
     def test_text_filter_then_select(self):
         res, lines = self.run_pick(["beta", "all"])
         self.assertEqual(res, ["beta/svc", "beta/lib"])
-        res, _ = self.run_pick(["beta", "3"])
+        res, _ = self.run_pick(["beta", "1"])
         self.assertEqual(res, ["beta/svc"])
 
     def test_out_of_range_reprompts(self):

@@ -283,11 +283,6 @@ class MainTests(ActionBase):
         self.assertEqual(len(r.calls), 4)
         self.assertFalse(load_state().polling)
 
-    def test_setup_stub(self):
-        err = io.StringIO()
-        with redirect_stderr(err):
-            self.assertEqual(self.main(["setup"], FakeRunner()), 1)
-
     def test_unknown_subcommand(self):
         with redirect_stderr(io.StringIO()):
             self.assertEqual(self.main(["bogus"], FakeRunner()), 2)

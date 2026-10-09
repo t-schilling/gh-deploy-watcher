@@ -19,7 +19,7 @@ from gh_deploy_watcher.state import VALID_FILTERS, State, load_state, save_state
 
 _GLOBAL_KINDS = ("auth", "missing", "network", "rate_limit")
 _NOTIFIED_CAP = 200
-_REPO_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*")
+_REPO_RE = re.compile(r"(?!\.{1,2}/)[A-Za-z0-9_.][A-Za-z0-9_.-]*/(?!\.{1,2}$)[A-Za-z0-9_.][A-Za-z0-9_.-]*")
 
 NotifyFn = Callable[[str, str], None]
 ConfirmFn = Callable[[str], bool]
@@ -184,7 +184,13 @@ def _dispatch(argv: List[str], script: str, runner: Runner, notify_fn: NotifyFn,
         return 0
     cmd, args = argv[0], argv[1:]
     if cmd == "setup":
-        return _fail("The setup wizard is not available yet.", 1)
+        try:
+            config = load_config()
+        except ConfigError as exc:
+            return _fail(str(exc), 1)
+        from gh_deploy_watcher import setup_wizard
+        setup_wizard.run_wizard(config, runner)
+        return 0
     if cmd == "rerun":
         flags = [a for a in args if a == "--dry-run"]
         pos = [a for a in args if a != "--dry-run"]
