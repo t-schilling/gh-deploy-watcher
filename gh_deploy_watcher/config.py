@@ -1,6 +1,7 @@
 """Load, validate and save the watcher configuration."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -9,7 +10,7 @@ from pathlib import Path
 from typing import Any, List, Optional
 
 VALID_ENVS = ("prd", "dev")
-_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+_REPO_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 
 
 class ConfigError(Exception):
@@ -45,7 +46,14 @@ def _default_path() -> Path:
     return config_dir() / "config.json"
 
 
-def _parse(data: Any) -> Config:
+def valid_repo_name(name: str) -> bool:
+    if not isinstance(name, str) or not _REPO_RE.fullmatch(name):
+        return False
+    return all(seg not in (".", "..") and not seg.startswith("-")
+               for seg in name.split("/"))
+
+
+def parse_config(data: Any) -> Config:
     if not isinstance(data, dict) or not isinstance(data.get("repos", []), list):
         raise ConfigError("config must be an object with a 'repos' list")
     repos: List[RepoConfig] = []
@@ -54,7 +62,7 @@ def _parse(data: Any) -> Config:
         if not isinstance(r, dict):
             raise ConfigError("each entry in 'repos' must be an object")
         repo = r.get("repo")
-        if not isinstance(repo, str) or not _REPO_RE.match(repo):
+        if not valid_repo_name(repo):
             raise ConfigError("invalid repo %r: expected 'owner/name'" % (repo,))
         wfs_raw = r.get("workflows", [])
         if not isinstance(wfs_raw, list):
@@ -81,6 +89,18 @@ def _parse(data: Any) -> Config:
             workflows.append(Workflow(file, env, label))
         repos.append(RepoConfig(repo, workflows))
     return Config(repos)
+
+
+_parse = parse_config
+
+
+def config_hash(path: Optional[Path] = None) -> str:
+    path = Path(path) if path else _default_path()
+    try:
+        data = path.read_bytes()
+    except FileNotFoundError:
+        data = b""
+    return hashlib.sha256(data).hexdigest()
 
 
 def load_config(path: Optional[Path] = None) -> Config:
