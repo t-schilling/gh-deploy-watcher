@@ -79,12 +79,13 @@ class UiShellBuildTest(unittest.TestCase):
             with self.subTest(line=line):
                 r = subprocess.run([str(self.exe)], input=(line + "\n").encode(),
                                    capture_output=True, timeout=30)
-                self.assertNotEqual(r.returncode, 0)
-                self.assertTrue(r.stderr.strip())
+                self.assertEqual(r.returncode, 2)
+                self.assertIn(b"refusing URL", r.stderr)
 
     def test_missing_stdin_line_is_refused(self) -> None:
         r = subprocess.run([str(self.exe)], input=b"", capture_output=True, timeout=30)
-        self.assertNotEqual(r.returncode, 0)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn(b"no URL on stdin", r.stderr)
 
 
 if __name__ == "__main__":

@@ -5,7 +5,7 @@ let maxStartURLBytes = 2048
 
 /// True only for `http://127.0.0.1:<port>/...` without credentials.
 func isAppURL(_ url: URL, port: Int) -> Bool {
-    guard url.scheme?.lowercased() == "http",
+    guard url.scheme == "http",
           url.host == "127.0.0.1",
           url.port == port,
           url.user == nil, url.password == nil else { return false }
@@ -76,6 +76,10 @@ func runSelfTest() -> [String] {
     }
     let others = ["http://localhost:8123/", "https://127.0.0.1:8123/", "http://127.0.0.1:9/",
                   "http://user@127.0.0.1:8123/", "file:///tmp/x", "https://example.com/"]
+    if let u = URL(string: "HTTP://127.0.0.1:8123/") { check(!isAppURL(u, port: 8123), "isAppURL rejects upper-case scheme") }
+    check(parseStartURL("HTTP://127.0.0.1:8123/") == nil, "upper-case scheme rejected")
+    check(parseStartURL("http://127.0.0.1:80@evil.com/") == nil, "userinfo after port")
+    check(parseStartURL("http://evil.com#@127.0.0.1:80/") == nil, "fragment trick")
     for s in others {
         if let u = URL(string: s) { check(!isAppURL(u, port: 8123), "isAppURL rejects " + s) }
     }
