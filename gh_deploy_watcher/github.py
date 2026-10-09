@@ -138,3 +138,7 @@ def auth_ok(runner: Runner = run_gh) -> bool:
     except GhError:
         return False
     return True
+
+
+def current_login(runner: Runner = run_gh) -> str:
+    return runner(["api", "user", "--jq", ".login"]).strip()

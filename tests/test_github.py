@@ -188,3 +188,10 @@ class RunGhTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CurrentLoginTests(unittest.TestCase):
+    def test_current_login(self):
+        r = FakeRunner("octocat\n")
+        self.assertEqual(github.current_login(r), "octocat")
+        self.assertEqual(r.calls, [["api", "user", "--jq", ".login"]])
