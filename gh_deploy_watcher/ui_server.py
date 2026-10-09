@@ -57,8 +57,17 @@ def _error(status: int, kind: str, message: str, allow: Optional[str] = None) ->
     return resp
 
 
+class _Httpd(ThreadingHTTPServer):
+    daemon_threads = False  # server_close() waits for in-flight responses
+
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        pass
+
+
 class _RequestHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.0"
+    server_version = "gh-deploy-watcher"
+    sys_version = ""
     timeout = 10
     ui: "UiServer"
 
@@ -73,11 +82,20 @@ class _RequestHandler(BaseHTTPRequestHandler):
             return self._handle
         raise AttributeError(name)
 
+    def send_error(self, code: int, message: Optional[str] = None,
+                   explain: Optional[str] = None) -> None:
+        self.close_connection = True
+        self._send(_error(code, "bad_request", "bad request"))
+
     def _send(self, resp: Response) -> None:
+        if not isinstance(resp, Response) or not isinstance(resp.status, int) \
+                or not 100 <= resp.status <= 599:
+            raise TypeError("invalid response")
         if resp.raw is not None:
             data = resp.raw
         else:
             data = json.dumps(resp.body, ensure_ascii=True).encode("ascii")
+        self.request_version = "HTTP/1.0"  # never fall back to header-less 0.9
         self.send_response(resp.status)
         self.send_header("Content-Type", resp.content_type)
         self.send_header("Content-Length", str(len(data)))
@@ -88,22 +106,26 @@ class _RequestHandler(BaseHTTPRequestHandler):
         if allow:
             self.send_header("Allow", allow)
         self.end_headers()
-        if self.command != "HEAD":
+        if getattr(self, "command", None) != "HEAD":
             self.wfile.write(data)
 
     def _handle(self) -> None:
         try:
-            resp = self._dispatch()
-        except Exception:
-            resp = _error(500, "internal", "internal error")
-        try:
-            self._send(resp)
+            self._send(self._dispatch())
         except OSError:
             pass
+        except Exception:
+            try:
+                self._send(_error(500, "internal", "internal error"))
+            except Exception:
+                pass
 
     def _dispatch(self) -> Response:
         ui = self.ui
         method = self.command
+        for name in ("host", "origin", "content-length", "content-type", "x-token"):
+            if len(self.headers.get_all(name) or []) > 1:
+                return _error(400, "bad_request", "duplicate header")
         headers = {k.lower(): v for k, v in self.headers.items()}
         if headers.get("host") != "127.0.0.1:%d" % ui.port:
             return _error(403, "forbidden", "bad host")
@@ -158,7 +180,7 @@ class _RequestHandler(BaseHTTPRequestHandler):
             declared = headers.get("content-length")
             if declared is None:
                 return _error(411, "length_required", "content length required")
-            if not declared.isdigit():
+            if not re.fullmatch(r"[0-9]+", declared):
                 return _error(400, "bad_request", "invalid content length")
             length = int(declared)
             if length > MAX_BODY:
@@ -166,7 +188,7 @@ class _RequestHandler(BaseHTTPRequestHandler):
             data = self.rfile.read(length)
             try:
                 body = json.loads(data.decode("utf-8"))
-            except ValueError:
+            except (ValueError, RecursionError):
                 return _error(400, "bad_request", "invalid JSON")
         return handler(Request(method, path, tuple(match.groups()), headers, body))
 
@@ -181,9 +203,10 @@ class UiServer:
         self.token = token or secrets.token_urlsafe(32)
         self.port = 0
         self.routes: List[Tuple[str, Pattern[str], Handler]] = []
-        self._httpd: Optional[ThreadingHTTPServer] = None
+        self._httpd: Optional[_Httpd] = None
         self._stopped = threading.Event()
         self._lock = threading.Lock()
+        self._stop_thread: Optional[threading.Thread] = None
         self._last = clock()
 
     @property
@@ -191,12 +214,13 @@ class UiServer:
         return "http://127.0.0.1:%d/#%s" % (self.port, self.token)
 
     def add_route(self, method: str, pattern: str, handler: Handler) -> None:
+        if not pattern.startswith("/api/"):
+            raise ValueError("routes must start with /api/")
         self.routes.append((method, re.compile(pattern), handler))
 
     def start(self) -> None:
         handler_cls = type("BoundHandler", (_RequestHandler,), {"ui": self})
-        httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler_cls)
-        httpd.daemon_threads = True
+        httpd = _Httpd(("127.0.0.1", 0), handler_cls)
         self._httpd = httpd
         self.port = httpd.server_address[1]
         self.touch()
@@ -214,19 +238,24 @@ class UiServer:
     def wait(self) -> None:
         while not self._stopped.wait(1.0):
             self.check_idle()
+        stopper = self._stop_thread
+        if stopper is not None and stopper is not threading.current_thread():
+            stopper.join(15)
 
     def shutdown(self) -> None:
         with self._lock:
             if self._stopped.is_set():
                 return
-            self._stopped.set()
             httpd = self._httpd
-        if httpd is not None:
-            # Run from a helper thread: safe when called from a request handler.
-            threading.Thread(target=self._stop_httpd, args=(httpd,), daemon=True).start()
+            if httpd is not None:
+                # Helper thread: safe when called from a request handler.
+                self._stop_thread = threading.Thread(
+                    target=self._stop_httpd, args=(httpd,), daemon=True)
+                self._stop_thread.start()
+            self._stopped.set()
 
     @staticmethod
-    def _stop_httpd(httpd: ThreadingHTTPServer) -> None:
+    def _stop_httpd(httpd: _Httpd) -> None:
         httpd.shutdown()
         httpd.server_close()
 
