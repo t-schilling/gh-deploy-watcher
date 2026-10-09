@@ -56,8 +56,7 @@ new_case() {
     p="$(command -v "$u")" && ln -s "$p" "$BIN/$u"
   done
   cp "$SRC_DIR/install.sh" "$REPO/install.sh"
-  printf '#!/usr/bin/env python3\n' > "$REPO/gh-deploy-watcher.1m.py"
-  chmod +x "$REPO/gh-deploy-watcher.1m.py"
+  write_entry "$REPO"
   stub uname 'echo "${STUB_UNAME:-Darwin}"'
   stub python3 '[ "${STUB_PY:-3.12}" = 3.8 ] && exit 1; exit 0'
   stub brew 'exit 0'
@@ -74,6 +73,12 @@ new_case() {
   done
 }
 
+# fake entrypoint: logs its arguments, exit code from STUB_SETUP_RC
+write_entry() {
+  printf '#!/bin/sh\necho "entry $*" >> "$STUB_LOG"\nexit "${STUB_SETUP_RC:-0}"\n' > "$1/gh-deploy-watcher.1m.py"
+  chmod +x "$1/gh-deploy-watcher.1m.py"
+}
+
 stub() { # name body
   printf '#!/bin/sh\necho "%s $*" >> "$STUB_LOG"\n%s\n' "$1" "$2" > "$BIN/$1"
   chmod +x "$BIN/$1"
@@ -85,7 +90,7 @@ run_install() {
   # shellcheck disable=SC2086
   OUT="$(cd "$CASE" && env -i HOME="$HOME_" PATH="$BIN" STUB_LOG="$LOG" STUB_APPS="$CASE/apps" \
     GH_DEPLOY_WATCHER_APPS_DIR="$CASE/apps" ${EXTRA_ENV:-} \
-    /bin/bash "$REPO/install.sh" "$@" 2>&1 < /dev/null)" || RC=$?
+    /bin/bash "$REPO/install.sh" "$@" 2>&1 <<< "${STDIN_TEXT:-}")" || RC=$?
 }
 
 TARGET_NAME="gh-deploy-watcher.1m.py"
@@ -201,8 +206,11 @@ new_case uninstall
 mkdir -p "$HOME_/.config/gh-deploy-watcher"
 echo '{"repos": []}' > "$HOME_/.config/gh-deploy-watcher/config.json"
 run_install --yes --plugin-dir "$PLUGINS"
+assert_rc 0 "install before uninstall"
+assert_true "link exists before uninstall" test -L "$PLUGINS/$TARGET_NAME"
 run_install --uninstall --plugin-dir "$PLUGINS"
 assert_rc 0 "uninstall"
+assert_out_has "Removed symlink" "uninstall says removed"
 assert_true "symlink removed" test ! -e "$PLUGINS/$TARGET_NAME" -a ! -L "$PLUGINS/$TARGET_NAME"
 assert_true "config kept" test -f "$HOME_/.config/gh-deploy-watcher/config.json"
 assert_true "repo kept" test -f "$REPO/$TARGET_NAME"
@@ -213,13 +221,84 @@ echo "mine" > "$PLUGINS/$TARGET_NAME"
 run_install --uninstall --plugin-dir "$PLUGINS"
 assert_true "foreign file kept on uninstall" test "$(cat "$PLUGINS/$TARGET_NAME")" = "mine"
 
+# 10b. uninstall leaves a symlink pointing elsewhere (exit 0, says so)
+new_case uninstall_other
+mkdir -p "$PLUGINS"
+ln -s "/somewhere/else/$TARGET_NAME" "$PLUGINS/$TARGET_NAME"
+run_install --uninstall --plugin-dir "$PLUGINS"
+assert_rc 0 "uninstall foreign symlink"
+assert_out_has "points elsewhere" "says it points elsewhere"
+assert_true "foreign symlink kept" test "$(readlink "$PLUGINS/$TARGET_NAME")" = "/somewhere/else/$TARGET_NAME"
+
+# 10c. dry-run uninstall claims nothing as done
+new_case uninstall_dry
+run_install --yes --plugin-dir "$PLUGINS"
+run_install --uninstall --dry-run --plugin-dir "$PLUGINS"
+assert_rc 0 "dry-run uninstall"
+assert_out_has "would run: rm" "dry-run uninstall lists rm"
+assert_out_lacks "Removed" "dry-run does not claim removal"
+assert_true "link still there after dry-run" test -L "$PLUGINS/$TARGET_NAME"
+
+# 13. setup prompt (interactive hook: GH_DEPLOY_WATCHER_INTERACTIVE=1 stands in for a tty)
+new_case setup_no
+STDIN_TEXT="n" EXTRA_ENV="GH_DEPLOY_WATCHER_INTERACTIVE=1" run_install --plugin-dir "$PLUGINS"
+assert_rc 0 "setup declined"
+assert_out_has "Run setup now?" "prompted"
+assert_out_has "Summary" "summary after declining"
+assert_log_lacks "entry setup" "setup not run on n"
+
+new_case setup_yes
+STDIN_TEXT="y" EXTRA_ENV="GH_DEPLOY_WATCHER_INTERACTIVE=1" run_install --plugin-dir "$PLUGINS"
+assert_rc 0 "setup accepted"
+assert_log_has "entry setup" "setup run on y"
+assert_out_has "Summary" "summary after setup"
+
+new_case setup_default
+STDIN_TEXT="" EXTRA_ENV="GH_DEPLOY_WATCHER_INTERACTIVE=1" run_install --plugin-dir "$PLUGINS"
+assert_rc 0 "setup default answer"
+assert_log_has "entry setup" "Enter means yes"
+
+new_case setup_fails
+STDIN_TEXT="y" EXTRA_ENV="GH_DEPLOY_WATCHER_INTERACTIVE=1 STUB_SETUP_RC=3" run_install --plugin-dir "$PLUGINS"
+assert_rc 0 "failing setup does not abort"
+assert_out_has "setup did not finish" "setup failure message"
+assert_out_has "Summary" "summary after failing setup"
+
+new_case setup_yes_flag
+EXTRA_ENV="GH_DEPLOY_WATCHER_INTERACTIVE=1" run_install --yes --plugin-dir "$PLUGINS"
+assert_out_lacks "Run setup now?" "--yes never prompts"
+assert_out_has "$REPO/$TARGET_NAME setup" "--yes prints command"
+assert_log_lacks "entry setup" "--yes never runs setup"
+EXTRA_ENV="GH_DEPLOY_WATCHER_INTERACTIVE=1" run_install --dry-run --plugin-dir "$PLUGINS"
+assert_out_lacks "Run setup now?" "--dry-run never prompts"
+assert_log_lacks "entry setup" "--dry-run never runs setup"
+assert_out_lacks "  changed:" "dry-run summary not claiming done"
+
+# 14. tilde expansion in all plugin-dir sources
+new_case tilde_flag
+run_install --yes --plugin-dir "~/x"
+assert_rc 0 "tilde in --plugin-dir"
+assert_true "expanded to fake HOME" test -L "$HOME_/x/$TARGET_NAME"
+new_case tilde_defaults
+EXTRA_ENV="STUB_SWIFTBAR_DIR=~/sb" run_install --yes
+assert_rc 0 "tilde in defaults result"
+assert_true "defaults tilde expanded" test -L "$HOME_/sb/$TARGET_NAME"
+new_case tilde_typed
+STDIN_TEXT="~/typed" EXTRA_ENV="GH_DEPLOY_WATCHER_INTERACTIVE=1" run_install
+assert_true "typed tilde expanded" test -L "$HOME_/typed/$TARGET_NAME"
+
+# 15. EOF on the plugin-dir prompt
+new_case eof_prompt
+STDIN_TEXT="" EXTRA_ENV="GH_DEPLOY_WATCHER_INTERACTIVE=1" run_install
+assert_rc_nonzero "EOF at folder prompt"
+assert_out_has "no folder given" "EOF message"
+
 # 11. repo path with a space
 new_case spaced
 REPO="$CASE/my repo"
 mkdir -p "$REPO"
 cp "$SRC_DIR/install.sh" "$REPO/install.sh"
-printf '#!/usr/bin/env python3\n' > "$REPO/$TARGET_NAME"
-chmod +x "$REPO/$TARGET_NAME"
+write_entry "$REPO"
 run_install --yes --plugin-dir "$CASE/plug ins"
 assert_rc 0 "path with space"
 assert_true "symlink with space" test "$(readlink "$CASE/plug ins/$TARGET_NAME")" = "$REPO/$TARGET_NAME"
