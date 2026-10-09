@@ -6,7 +6,7 @@ import unittest
 from gh_deploy_watcher.github import WorkflowInfo
 from gh_deploy_watcher.selection import clean, preselect, suggest
 
-HOSTILE = "PRD\x1b[2J\x1b]0;pwn\x07 | Deploy\r\nto‮ EU"
+HOSTILE = "PRD\x1b[2J\x1b]0;pwn\x07 | Deploy\r\nto\u202e EU"
 
 
 def wf(name, path, state="active"):
@@ -46,7 +46,7 @@ class PreselectTests(unittest.TestCase):
 
 class SanitizeTests(unittest.TestCase):
     def test_clean(self):
-        self.assertEqual(clean("a\x1b[0m\tb | c‮  d\r\n"), "a[0mb c d")
+        self.assertEqual(clean("a\x1b[0m\tb | c\u202e  d\r\n"), "a[0mb c d")
 
     def test_suggest_label_clean(self):
         env, label = suggest(wf(HOSTILE, "deploy-x.yaml"))

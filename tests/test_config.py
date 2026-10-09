@@ -13,8 +13,11 @@ from gh_deploy_watcher.config import (
     RepoConfig,
     Workflow,
     config_dir,
+    config_hash,
     load_config,
+    parse_config,
     save_config,
+    valid_repo_name,
 )
 
 
@@ -87,3 +90,43 @@ class ConfigTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ParseConfigTests(unittest.TestCase):
+    def test_parse_config_valid_and_alias(self):
+        from gh_deploy_watcher import config as cfg
+        c = parse_config(_cfg())
+        self.assertEqual(c.repos[0].workflows[0], Workflow("deploy.yaml", "prd", "PRD"))
+        self.assertIs(cfg._parse, parse_config)
+
+    def test_parse_config_rejects_bad_shapes(self):
+        for bad in ([], {"repos": "x"}, _cfg(env="qa"), _cfg(repo="acme")):
+            with self.assertRaises(ConfigError):
+                parse_config(bad)
+
+
+class ConfigHashTests(unittest.TestCase):
+    def test_hash_of_file_and_missing(self):
+        import hashlib
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "config.json"
+            self.assertEqual(config_hash(p), hashlib.sha256(b"").hexdigest())
+            p.write_bytes(b'{"repos": []}')
+            self.assertEqual(config_hash(p), hashlib.sha256(b'{"repos": []}').hexdigest())
+
+    def test_default_path_uses_home(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(
+                os.environ, {"GH_DEPLOY_WATCHER_HOME": d}):
+            (Path(d) / "config.json").write_bytes(b"x")
+            self.assertEqual(config_hash(), config_hash(Path(d) / "config.json"))
+
+
+class ValidRepoNameTests(unittest.TestCase):
+    def test_valid(self):
+        for name in ("acme/api", "a.b/c_d-e", "acme/.github"):
+            self.assertTrue(valid_repo_name(name), name)
+
+    def test_invalid(self):
+        for name in ("acme", "", "/api", "acme/", "-x/api", "acme/-y", "./api",
+                     "acme/..", "../api", "acme/api\n", "acme/a b", "a/b/c", "acme/\u202eapi"):
+            self.assertFalse(valid_repo_name(name), repr(name))
