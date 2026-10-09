@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gh-deploy-watcher · What to track (glass mockup)</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --text: #12151b; --muted: #4b5563; --faint: #6b7280;
+    --glass-a: rgba(255,255,255,.84); --glass-b: rgba(255,255,255,.64);
+    --glass-edge: rgba(255,255,255,.75); --glass-edge-soft: rgba(255,255,255,.28);
+    --glass-shadow: 0 10px 40px rgba(40,60,140,.18), 0 2px 8px rgba(40,60,140,.10);
+    --solid: #f2f4f8; --field: rgba(255,255,255,.78);
+    --accent: #0a74ff; --accent-2: #5e5ce6; --ok: #12a150; --danger: #d92d20;
+    --prd: #c0271d; --prd-bg: rgba(255,90,80,.16); --dev: #0a58d6; --dev-bg: rgba(10,116,255,.14);
+    --row-hover: rgba(255,255,255,.35); --active: rgba(255,255,255,.60);
+    --blob1: #8fb2ff; --blob2: #a9b4ff; --blob3: #9ccfff; --blob4: #c3ccff; --base: #eef2fd;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --text: #f2f4f8; --muted: #b5bcc9; --faint: #8b93a3;
+      --glass-a: rgba(44,48,62,.82); --glass-b: rgba(24,27,38,.68);
+      --glass-edge: rgba(255,255,255,.28); --glass-edge-soft: rgba(255,255,255,.08);
+      --glass-shadow: 0 14px 44px rgba(0,0,0,.50), 0 2px 8px rgba(0,0,0,.30);
+      --solid: #1b1e27; --field: rgba(255,255,255,.10);
+      --accent: #4c9bff; --accent-2: #8a85ff; --ok: #3ddc84; --danger: #ff7a70;
+      --prd: #ff9a90; --prd-bg: rgba(255,90,80,.20); --dev: #8ab8ff; --dev-bg: rgba(76,155,255,.20);
+      --row-hover: rgba(255,255,255,.06); --active: rgba(255,255,255,.14);
+      --blob1: #2a50c8; --blob2: #3b3fb8; --blob3: #1f5f9c; --blob4: #2e3f8f; --base: #0c0f17;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; color: var(--text); background: var(--base);
+    font: 14px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  /* Colourful field that the glass refracts. */
+  .bg { position: fixed; inset: 0; overflow: hidden; z-index: 0; }
+  .bg i { position: absolute; border-radius: 50%; filter: blur(70px); opacity: .85; animation: drift 26s ease-in-out infinite alternate; }
+  .bg i:nth-child(1) { width: 46vmax; height: 46vmax; left: -10vmax; top: -12vmax; background: var(--blob1); }
+  .bg i:nth-child(2) { width: 40vmax; height: 40vmax; right: -12vmax; top: 6vmax; background: var(--blob2); animation-delay: -8s; }
+  .bg i:nth-child(3) { width: 38vmax; height: 38vmax; left: 18vmax; bottom: -18vmax; background: var(--blob3); animation-delay: -14s; }
+  .bg i:nth-child(4) { width: 28vmax; height: 28vmax; right: 8vmax; bottom: -6vmax; background: var(--blob4); animation-delay: -4s; }
+  @keyframes drift { to { transform: translate3d(5vmax, 3vmax, 0) scale(1.08); } }
+
+  /* The glass material. */
+  .glass {
+    position: relative;
+    background: linear-gradient(145deg, var(--glass-a), var(--glass-b));
+    -webkit-backdrop-filter: blur(26px) saturate(185%); backdrop-filter: blur(26px) saturate(185%);
+    border: 1px solid var(--glass-edge-soft);
+    box-shadow: var(--glass-shadow),
+                inset 0 1px 0 var(--glass-edge),
+                inset 1px 0 0 var(--glass-edge-soft),
+                inset 0 -1px 0 var(--glass-edge-soft);
+    border-radius: 26px;
+  }
+  .glass::before { /* specular highlight in the top-left corner */
+    content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+    background: radial-gradient(120% 70% at 8% 0%, rgba(255,255,255,.55), rgba(255,255,255,0) 55%);
+    mix-blend-mode: soft-light; opacity: .9;
+  }
+  @media (prefers-color-scheme: dark) { .glass::before { opacity: .35; } }
+
+  .wrap { position: relative; z-index: 1; max-width: 1160px; margin: 0 auto; padding: 18px 24px 120px; }
+
+  header.glass { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 18px;
+                 padding: 14px 18px 14px 16px; border-radius: 30px; margin-bottom: 18px; }
+  .logo { width: 44px; height: 44px; border-radius: 14px; display: grid; place-items: center; color: #fff;
+          background: linear-gradient(145deg, #5aa2ff, #4f4de0);
+          box-shadow: inset 0 1px 0 rgba(255,255,255,.6), inset 0 -2px 4px rgba(0,0,0,.18), 0 6px 16px rgba(60,80,220,.40); }
+  .logo svg { width: 24px; height: 24px; }
+  .title h1 { font-size: 17px; margin: 0; font-weight: 700; letter-spacing: -.02em; }
+  .title p { margin: 1px 0 0; color: var(--muted); font-size: 13px; }
+  .stats { display: flex; gap: 10px; justify-content: flex-end; }
+  .stat { display: flex; flex-direction: column; align-items: center; min-width: 74px; padding: 6px 14px; border-radius: 16px;
+          background: var(--field); border: 1px solid var(--glass-edge-soft); box-shadow: inset 0 1px 0 var(--glass-edge); }
+  .stat b { font-size: 17px; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; }
+  .stat span { font-size: 11px; color: var(--muted); letter-spacing: .02em; }
+  .who { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 13px; }
+  .pill { display: inline-flex; align-items: center; gap: 7px; padding: 4px 11px; border-radius: 999px; background: var(--field);
+          border: 1px solid var(--glass-edge-soft); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+
+  main { display: grid; grid-template-columns: 340px 1fr; gap: 18px; align-items: start; }
+  .panel { overflow: hidden; }
+  .panel > h2 { margin: 0; padding: 16px 20px 6px; font-size: 12px; letter-spacing: .08em; text-transform: uppercase;
+                color: var(--muted); display: flex; justify-content: space-between; }
+
+  .search { padding: 8px 14px 10px; position: relative; }
+  .search svg { position: absolute; left: 26px; top: 50%; transform: translateY(-50%); width: 15px; height: 15px; color: var(--faint); }
+  .search input { width: 100%; padding: 9px 12px 9px 34px; border-radius: 999px; border: 1px solid var(--glass-edge-soft);
+                  background: var(--field); color: var(--text); font: inherit;
+                  box-shadow: inset 0 1px 2px rgba(0,0,0,.08); }
+  input:focus-visible, button:focus-visible, .seg button:focus-visible, .switch:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .repos { max-height: 520px; overflow: auto; padding: 4px 10px 12px; }
+  .group { padding: 10px 12px 4px; font-size: 11px; color: var(--faint); text-transform: uppercase; letter-spacing: .08em; }
+  .repo { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; margin: 2px 0; border-radius: 16px;
+          cursor: pointer; transition: background .15s, transform .15s; }
+  .repo:hover { background: var(--row-hover); }
+  .repo.active { background: var(--active); box-shadow: inset 0 1px 0 var(--glass-edge), 0 4px 14px rgba(40,60,140,.12); }
+  .repo .org { color: var(--faint); font-weight: 400; } .repo .name { font-weight: 560; }
+  .badge { font-size: 11px; font-weight: 650; min-width: 22px; text-align: center; padding: 2px 8px; border-radius: 999px;
+           color: #fff; background: linear-gradient(135deg, var(--accent), var(--accent-2));
+           box-shadow: inset 0 1px 0 rgba(255,255,255,.5), 0 2px 8px rgba(10,116,255,.35); }
+
+  .head { padding: 18px 22px 14px; display: flex; justify-content: space-between; align-items: center; }
+  .head h3 { margin: 0; font-size: 20px; letter-spacing: -.02em; }
+  .head small { color: var(--muted); }
+  .hint { margin: 0 18px 8px; padding: 10px 14px; border-radius: 16px; background: var(--dev-bg); color: var(--dev); font-size: 13px; }
+  .error { margin: 0 18px 8px; padding: 10px 14px; border-radius: 16px; background: var(--prd-bg); color: var(--prd); display: none; }
+
+  .rows { padding: 4px 12px 8px; }
+  .row { display: grid; grid-template-columns: 54px 1.25fr 1fr 118px; gap: 14px; align-items: center; padding: 12px 12px; margin: 2px 0;
+         border-radius: 18px; transition: background .15s, opacity .2s; }
+  .row:hover { background: var(--row-hover); }
+  .row.off .file, .row.off .label-in { opacity: .55; }
+  .file { font-weight: 560; } .file small { display: block; color: var(--faint); font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; margin-top: 1px; }
+  .label-in { width: 100%; padding: 8px 12px; border-radius: 12px; border: 1px solid var(--glass-edge-soft); background: var(--field);
+              color: var(--text); font: inherit; box-shadow: inset 0 1px 2px rgba(0,0,0,.06); }
+  .label-in:disabled { cursor: not-allowed; }
+
+  /* Toggle switch (glass track + bright thumb). */
+  .switch { appearance: none; -webkit-appearance: none; width: 46px; height: 28px; border-radius: 999px; position: relative; cursor: pointer;
+            background: var(--field); border: 1px solid var(--glass-edge-soft);
+            box-shadow: inset 0 2px 4px rgba(0,0,0,.14); transition: background .2s; margin: 0; }
+  .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 22px; height: 22px; border-radius: 50%;
+                   background: linear-gradient(#fff, #e9edf5); box-shadow: 0 2px 6px rgba(0,0,0,.28), inset 0 1px 0 #fff;
+                   transition: transform .22s cubic-bezier(.3,1.4,.5,1); }
+  .switch:checked { background: linear-gradient(135deg, var(--ok), #5fe39a); border-color: transparent;
+                    box-shadow: inset 0 1px 0 rgba(255,255,255,.4), 0 0 14px rgba(18,161,80,.35); }
+  .switch:checked::after { transform: translateX(18px); }
+
+  /* Segmented control. */
+  .seg { display: inline-grid; grid-template-columns: 1fr 1fr; padding: 3px; border-radius: 999px; background: var(--field);
+         border: 1px solid var(--glass-edge-soft); box-shadow: inset 0 1px 3px rgba(0,0,0,.10); width: 100%; }
+  .seg button { border: 0; background: transparent; color: var(--muted); font: inherit; font-weight: 600; padding: 5px 0; border-radius: 999px;
+                cursor: pointer; transition: all .18s; }
+  .seg button.on { color: #fff; box-shadow: inset 0 1px 0 rgba(255,255,255,.5), 0 2px 8px rgba(0,0,0,.2); }
+  .seg button.on[data-v=prd] { background: linear-gradient(135deg, #ff6b5e, #e5352a); }
+  .seg button.on[data-v=dev] { background: linear-gradient(135deg, #4aa3ff, #2d6bf0); }
+  .seg.disabled { opacity: .45; pointer-events: none; }
+
+  .legend { padding: 4px 24px 18px; color: var(--faint); font-size: 12px; }
+
+  /* Floating action bar. */
+  footer.glass { position: fixed; z-index: 2; left: 50%; bottom: 22px; transform: translateX(-50%); width: min(860px, calc(100% - 40px));
+                 display: flex; align-items: center; justify-content: space-between; padding: 10px 12px 10px 24px; border-radius: 999px; }
+  .summary { color: var(--muted); } .plus { color: var(--ok); } .minus { color: var(--danger); } .summary b { font-weight: 650; }
+  .btns { display: flex; gap: 10px; }
+  button.btn { font: inherit; font-weight: 600; padding: 10px 22px; border-radius: 999px; cursor: pointer; color: var(--text);
+               background: var(--field); border: 1px solid var(--glass-edge-soft);
+               box-shadow: inset 0 1px 0 var(--glass-edge), 0 2px 8px rgba(0,0,0,.08); transition: transform .12s, box-shadow .12s; }
+  button.btn:hover { transform: translateY(-1px); }
+  button.btn.primary { color: #fff; border-color: transparent; background: linear-gradient(135deg, var(--accent), var(--accent-2));
+                       box-shadow: inset 0 1px 0 rgba(255,255,255,.55), 0 6px 18px rgba(10,116,255,.40); }
+  button.btn:disabled { opacity: .45; cursor: default; transform: none; }
+  button.ghost { font: inherit; font-weight: 600; padding: 7px 14px; border-radius: 999px; cursor: pointer; color: var(--accent);
+                 background: var(--field); border: 1px solid var(--glass-edge-soft); }
+  .empty { padding: 36px 16px; text-align: center; color: var(--muted); }
+
+  @media (max-width: 860px) { main { grid-template-columns: 1fr; } .row { grid-template-columns: 54px 1fr; } }
+  @media (prefers-reduced-motion: reduce) { .bg i { animation: none; } * { transition: none !important; } }
+  @media (prefers-reduced-transparency: reduce) {
+    .glass { background: var(--solid); -webkit-backdrop-filter: none; backdrop-filter: none; }
+    .glass::before { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="bg" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+
+<div class="wrap">
+  <header class="glass">
+    <div class="logo" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-7 4 14 3-7h4"/></svg>
+    </div>
+    <div class="title"><h1>What to track</h1><p>Pick the deploy workflows gh-deploy-watcher should follow</p></div>
+    <div class="stats">
+      <div class="stat"><b id="st-repos">0</b><span>repos</span></div>
+      <div class="stat"><b id="st-wf">0</b><span>workflows</span></div>
+      <div class="stat who"><span class="pill"><span class="dot"></span> your-login</span></div>
+    </div>
+  </header>
+
+  <main>
+    <section class="glass panel">
+      <h2>Repos <span id="count"></span></h2>
+      <div class="search">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="9" cy="9" r="6"/><path d="M14 14l4 4"/></svg>
+        <input id="q" placeholder="Search repos…" autocomplete="off" aria-label="Search repos">
+      </div>
+      <div class="repos" id="repos"></div>
+    </section>
+
+    <section class="glass panel" id="detail"></section>
+  </main>
+</div>
+
+<footer class="glass">
+  <div class="summary" id="summary"></div>
+  <div class="btns"><button class="btn" id="cancel">Cancel</button><button class="btn primary" id="save">Save</button></div>
+</footer>
+
+<script>
+  // Fake data: nothing here is real.
+  const repos = [
+    { name: "acme/api", tracked: ["deploy-prd-eu.yaml", "deploy-dev-eu.yaml"] },
+    { name: "acme/web", tracked: ["deploy-prd-eu.yaml"] },
+    { name: "acme/infra", tracked: [] }, { name: "acme/docs", tracked: [] },
+    { name: "acme/mobile", tracked: [] }, { name: "acme/billing", tracked: [] },
+    { name: "acme/auth", tracked: [] }, { name: "acme/.github", tracked: [] },
+    { name: "partner/sdk", tracked: [] }, { name: "partner/dashboard", tracked: [] },
+  ];
+  const WF = [
+    { file: "deploy-prd-eu.yaml", name: "PRD - Deploy to EU", env: "prd", label: "PRD · EU", deploy: true },
+    { file: "deploy-prd-us.yaml", name: "PRD - Deploy to US", env: "prd", label: "PRD · US", deploy: true },
+    { file: "deploy-dev-eu.yaml", name: "DEV - Deploy to EU", env: "dev", label: "DEV · EU", deploy: true },
+    { file: "deploy-dev-us.yaml", name: "DEV - Deploy to US", env: "dev", label: "DEV · US", deploy: true },
+    { file: "deploy-prd-eu-old.yaml", name: "PRD - Deploy to EU - Old", env: "prd", label: "PRD · EU", deploy: false },
+    { file: "codeql.yml", name: "CodeQL", env: "dev", label: "CodeQL", deploy: false },
+    { file: "dependabot.yml", name: "Dependabot Updates", env: "dev", label: "Dependabot Updates", deploy: false },
+  ];
+  const initial = {}, state = {};
+  repos.forEach(r => { initial[r.name] = new Set(r.tracked); });
+  function ensure(repo) {
+    if (state[repo]) return state[repo];
+    const s = {};
+    WF.forEach(w => { s[w.file] = { on: initial[repo].has(w.file), env: w.env, label: w.label }; });
+    return (state[repo] = s);
+  }
+  repos.forEach(r => ensure(r.name));
+  let current = "acme/api";
+
+  const $ = id => document.getElementById(id);
+  const tracked = repo => Object.values(state[repo]).filter(x => x.on).length;
+  const esc = s => s.replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  function renderRepos() {
+    const q = $("q").value.trim().toLowerCase();
+    const list = repos.filter(r => r.name.toLowerCase().includes(q));
+    const yes = list.filter(r => tracked(r.name) > 0), no = list.filter(r => tracked(r.name) === 0);
+    const item = r => {
+      const [org, nm] = r.name.split("/"), n = tracked(r.name);
+      return `<div class="repo ${r.name === current ? "active" : ""}" data-repo="${esc(r.name)}" tabindex="0" role="button">
+        <span class="name"><span class="org">${esc(org)}/</span>${esc(nm)}</span>${n ? `<span class="badge">${n}</span>` : ""}</div>`;
+    };
+    $("repos").innerHTML = (yes.length ? `<div class="group">Tracked</div>${yes.map(item).join("")}` : "") +
+      (no.length ? `<div class="group">All repos</div>${no.map(item).join("")}` : "") +
+      (!list.length ? `<div class="empty">No repos match “${esc(q)}”.</div>` : "");
+    $("count").textContent = repos.length;
+    document.querySelectorAll(".repo").forEach(el => {
+      const go = () => { current = el.dataset.repo; render(); };
+      el.onclick = go; el.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } };
+    });
+  }
+
+  function renderDetail() {
+    const s = ensure(current), isNew = initial[current].size === 0 && tracked(current) === 0;
+    const rows = WF.map(w => {
+      const st = s[w.file];
+      return `<div class="row ${st.on ? "" : "off"}" data-file="${w.file}">
+        <input class="switch" type="checkbox" role="switch" ${st.on ? "checked" : ""} aria-label="Track ${esc(w.name)}">
+        <div class="file">${esc(w.name)}<small>${esc(w.file)}</small></div>
+        <input class="label-in" type="text" value="${esc(st.label)}" ${st.on ? "" : "disabled"} aria-label="Label">
+        <div class="seg ${st.on ? "" : "disabled"}" role="group" aria-label="Environment">
+          <button data-v="prd" class="${st.env === "prd" ? "on" : ""}">prd</button>
+          <button data-v="dev" class="${st.env === "dev" ? "on" : ""}">dev</button></div></div>`;
+    }).join("");
+    $("detail").innerHTML = `
+      <div class="head"><div><h3>${esc(current)}</h3><small>${WF.length} workflows</small></div>
+        <button class="ghost" id="suggested">Select suggested</button></div>
+      ${isNew ? `<div class="hint">Workflows with “deploy” in the name are suggested. Nothing is saved until you press Save.</div>` : ""}
+      <div class="error" id="err">Could not load workflows for this repo. <a href="#">Retry</a></div>
+      <div class="rows">${rows}</div>
+      <div class="legend">Label is what shows in the menu bar dropdown. Env drives the PRD/DEV filter and the re-run confirmation.</div>`;
+    document.querySelectorAll(".row").forEach(row => {
+      const f = row.dataset.file, st = s[f];
+      row.querySelector(".switch").onchange = e => { st.on = e.target.checked; render(); };
+      row.querySelector(".label-in").oninput = e => { st.label = e.target.value; };
+      row.querySelectorAll(".seg button").forEach(b => b.onclick = () => { st.env = b.dataset.v; render(); });
+    });
+    $("suggested").onclick = () => { WF.forEach(w => { s[w.file].on = w.deploy; }); render(); };
+  }
+
+  function summary() {
+    let add = 0, rem = 0;
+    repos.forEach(r => WF.forEach(w => {
+      const was = initial[r.name].has(w.file), now = state[r.name][w.file].on;
+      if (now && !was) add++; if (!now && was) rem++;
+    }));
+    $("summary").innerHTML = add || rem ? `Changes: <b class="plus">+${add}</b> added · <b class="minus">−${rem}</b> removed` : "No changes yet";
+    $("save").disabled = !(add || rem);
+    $("st-repos").textContent = repos.filter(r => tracked(r.name) > 0).length;
+    $("st-wf").textContent = repos.reduce((n, r) => n + tracked(r.name), 0);
+  }
+  function render() { renderRepos(); renderDetail(); summary(); }
+  $("q").oninput = renderRepos;
+  $("cancel").onclick = () => alert("Mockup: Cancel closes the page and writes nothing.");
+  $("save").onclick = () => alert("Mockup: Save writes config.json atomically, then offers Done.");
+  render();
+</script>
+</body>
+</html>
