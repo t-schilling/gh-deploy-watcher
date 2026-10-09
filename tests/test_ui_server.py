@@ -6,6 +6,7 @@ import io
 import json
 import os
 import socket
+import select
 import subprocess
 import sys
 import tempfile
@@ -451,6 +452,7 @@ from pathlib import Path
 from gh_deploy_watcher.ui_server import Response, UiServer
 s = UiServer(Path(tempfile.mkdtemp()), token="tok")
 s.add_route("POST", r"/api/stop", lambda r: (s.shutdown(), Response(200, {}))[1])
+s.add_route("POST", r"/api/bigstop", lambda r: (s.shutdown(), Response(200, raw=b"x" * 3000000))[1])
 s.start()
 print(s.port, flush=True)
 s.wait()
@@ -458,6 +460,33 @@ s.wait()
 
 
 class RoundTwoTests(ServerCase):
+    def child_port(self, proc):
+        ready, _, _ = select.select([proc.stdout], [], [], 10)
+        self.assertTrue(ready, "child did not start")
+        return int(proc.stdout.readline())
+
+    def test_shutdown_reply_is_never_cut(self):
+        repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with tempfile.TemporaryDirectory() as d:
+            for i in range(30):
+                proc = subprocess.Popen([sys.executable, "-c", CHILD, repo], cwd=d,
+                                        stdout=subprocess.PIPE, text=True)
+                try:
+                    port = self.child_port(proc)
+                    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+                    conn.request("POST", "/api/bigstop", "{}", {
+                        "Host": "127.0.0.1:%d" % port,
+                        "Origin": "http://127.0.0.1:%d" % port,
+                        "X-Token": "tok", "Content-Type": "application/json"})
+                    resp = conn.getresponse()
+                    time.sleep(0.15)
+                    self.assertEqual(len(resp.read()), 3000000, "run %d" % i)
+                    self.assertEqual(proc.wait(timeout=8), 0)
+                finally:
+                    proc.kill()
+                    proc.wait()
+                    proc.stdout.close()
+
     def test_oserror_in_handler_gives_500(self):
         calls = []
 
@@ -519,7 +548,8 @@ class RoundTwoTests(ServerCase):
             proc = subprocess.Popen([sys.executable, "-c", CHILD, repo], cwd=d,
                                     stdout=subprocess.PIPE, text=True)
             self.addCleanup(proc.kill)
-            port = int(proc.stdout.readline())
+            self.addCleanup(proc.stdout.close)
+            port = self.child_port(proc)
             stop = threading.Event()
 
             def trickle():
