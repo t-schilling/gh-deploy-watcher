@@ -31,7 +31,15 @@ class EntrypointTests(unittest.TestCase):
                               env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                               universal_newlines=True)
 
-    def test_missing_actions_falls_back(self):
+    def test_bad_config_gives_warning_menu(self):
+        (self.home / "config.json").write_text("{not json")
+        r = self.run_plugin(self.plugin_dir())
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(r.stdout.startswith("\u26a0"), r.stdout)
+        self.assertIn("not valid JSON", r.stdout)
+        self.assertNotIn("Traceback", r.stdout + r.stderr)
+
+    def test_paused_with_no_config_renders_menu(self):
         r = self.run_plugin(self.plugin_dir())
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertTrue(r.stdout.startswith("\u23f8"), r.stdout)
