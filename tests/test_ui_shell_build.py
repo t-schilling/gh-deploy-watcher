@@ -70,10 +70,12 @@ class UiShellBuildTest(unittest.TestCase):
     def test_selftest_passes(self) -> None:
         r = subprocess.run([str(self.exe), "--selftest"], capture_output=True, text=True, timeout=60)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("menu checks ok", r.stdout)
 
     def test_bad_urls_are_refused_without_a_window(self) -> None:
         for line in ["", "http://localhost:80/", "file:///etc/passwd", "http://127.0.0.1:0/",
-                     "http://evil@127.0.0.1:80/", "http://127.0.0.1:80/ x"]:
+                     "http://evil@127.0.0.1:80/", "http://127.0.0.1:80/ x",
+                     "http://127.0.0.1:80@evil.com/", "http://evil.com#@127.0.0.1:80/"]:
             with self.subTest(line=line):
                 r = subprocess.run([str(self.exe)], input=(line + "\n").encode(),
                                    capture_output=True, timeout=30)
