@@ -101,7 +101,8 @@
     current: null,
     query: "",
     saved: false,
-    busy: false
+    busy: false,
+    ended: false            // set once Cancel, Done or an invalid session closes the page
   };
 
   root.ghdwDirty = false;
@@ -222,6 +223,7 @@
   }
 
   function endSession(kind, message) {
+    state.ended = true;
     document.body.classList.add("over");
     root.ghdwDirty = false;
     showNotice(kind, message);
@@ -238,6 +240,7 @@
 
   /** One place that turns an API failure into the right banner. */
   function showFailure(err, retry) {
+    if (state.ended) { return; }
     if (err.status === 401) { showInvalidSession(); }
     else if (err.kind === "auth") { showSignedOut(); }
     else if (err.status === 409) {
@@ -278,6 +281,7 @@
   }
 
   function renderSummary() {
+    if (state.ended) { return; }
     var diff = diffSelection(flatten(state.loadedConfig), selectedItems());
     var changed = hasChanges(diff);
     root.ghdwDirty = changed;
@@ -551,6 +555,20 @@
     });
   }
 
+  /** Take the server's canonical config (it cleans labels); fall back to what we sent. */
+  function adoptSavedConfig(sent) {
+    return api("GET", "/api/session").then(function (data) {
+      state.baseHash = data.config_hash;
+      state.loadedConfig = data.config;
+      flatten(data.config).forEach(function (it) {
+        draftsFor(it.repo).set(it.file, { env: it.env, label: it.label });
+      });
+      renderDetail();
+    }, function () {
+      state.loadedConfig = { repos: sent.repos };
+    });
+  }
+
   function save() {
     if (state.busy) { return; }
     var body = buildPutBody(state.loadedConfig, selectedItems(), state.baseHash);
@@ -558,9 +576,9 @@
     clearNotice();
     renderSummary();
     api("PUT", "/api/config", body).then(function (res) {
-      state.loadedConfig = { repos: body.repos };
       state.baseHash = res.config_hash;
       state.saved = true;
+      return adoptSavedConfig(body);
     }, function (err) {
       showFailure(err, null);
     }).then(function () {
