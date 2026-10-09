@@ -10,6 +10,8 @@ APPS_DIR="${GH_DEPLOY_WATCHER_APPS_DIR:-/Applications}"
 DRY_RUN=0
 ASSUME_YES=0
 UNINSTALL=0
+NO_WINDOW=0
+WINDOW_STATUS=""
 PLUGIN_DIR=""
 CHANGED=()
 UNCHANGED=()
@@ -24,6 +26,8 @@ Options:
   --dry-run             Print every action as "would run: ..." and change nothing.
   --plugin-dir <path>   Use this SwiftBar plugin folder instead of detecting it.
   --yes                 Never prompt; fail with a clear message if input is needed.
+  --no-window           Skip building the native window (build/GhDeployWatcher.app);
+                        the page then opens in the browser.
   --uninstall           Remove the plugin symlink this installer created.
                         Never touches ~/.config/gh-deploy-watcher/.
   --help                Show this help.
@@ -48,6 +52,7 @@ while [ $# -gt 0 ]; do
     --dry-run) DRY_RUN=1 ;;
     --yes) ASSUME_YES=1 ;;
     --uninstall) UNINSTALL=1 ;;
+    --no-window) NO_WINDOW=1 ;;
     --plugin-dir)
       [ $# -ge 2 ] || die "--plugin-dir needs a path"
       PLUGIN_DIR="$2"
@@ -184,7 +189,35 @@ if [ ! -x "$ENTRY" ]; then
   CHANGED+=("made the entrypoint executable")
 fi
 
-# 8. setup wizard (offered; never aborts the installer)
+# 8. native window (optional; a missing toolchain or failed build never fails the install)
+WINDOW_EXE="$REPO_DIR/build/GhDeployWatcher.app/Contents/MacOS/GhDeployWatcher"
+WINDOW_SRC="$REPO_DIR/ui-shell"
+window_stale() {
+  [ -x "$WINDOW_EXE" ] || return 0
+  [ -n "$(find "$WINDOW_SRC" -path "$WINDOW_SRC/.build" -prune -o -type f -newer "$WINDOW_EXE" -print -quit 2>/dev/null || true)" ]
+}
+if [ "$NO_WINDOW" -eq 1 ]; then
+  WINDOW_STATUS="skipped (--no-window; the page opens in the browser)"
+elif ! command -v swift >/dev/null 2>&1; then
+  WINDOW_STATUS="skipped (swift not found; the page will open in the browser)"
+elif ! xcrun --show-sdk-path >/dev/null 2>&1; then
+  WINDOW_STATUS="skipped (no macOS SDK, try: xcode-select --install; the page will open in the browser)"
+elif window_stale; then
+  if [ "$DRY_RUN" -eq 1 ]; then
+    run /bin/bash "$WINDOW_SRC/build.sh"
+    WINDOW_STATUS="would build"
+  elif run /bin/bash "$WINDOW_SRC/build.sh" >/dev/null; then
+    WINDOW_STATUS="built"
+  else
+    info "Building the native window failed; the page will open in the browser instead."
+    info "Fix the error above and re-run ./install.sh to try again."
+    WINDOW_STATUS="skipped (build failed; the page will open in the browser)"
+  fi
+else
+  WINDOW_STATUS="already built"
+fi
+
+# 9. setup wizard (offered; never aborts the installer)
 answer="y"
 if interactive && [ "$DRY_RUN" -eq 0 ]; then
   printf "Run setup now? [Y/n] "
@@ -210,4 +243,5 @@ if [ ${#CHANGED[@]} -eq 0 ]; then
 else
   for item in "${CHANGED[@]}"; do info "  $verb: $item"; done
 fi
+info "  window: $WINDOW_STATUS"
 for ((i = 0; i < ${#UNCHANGED[@]}; i++)); do info "  already: ${UNCHANGED[$i]}"; done
