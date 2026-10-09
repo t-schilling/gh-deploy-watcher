@@ -30,8 +30,10 @@ class FakeStdin:
         self.data = ""
         self.closed = False
 
-    def write(self, text):
-        self.data += text
+    def write(self, data):
+        if not isinstance(data, bytes):  # a real Popen stdin pipe is binary
+            raise TypeError("a bytes-like object is required, not %r" % type(data).__name__)
+        self.data += data.decode("utf-8")
 
     def flush(self):
         pass
@@ -209,7 +211,7 @@ class RunUiTests(LauncherCase):
         sp = Spawner(self.clock)
 
         class Broken(FakeStdin):
-            def write(self, text):
+            def write(self, data):
                 raise BrokenPipeError()
         orig = sp.__call__
 
@@ -221,6 +223,70 @@ class RunUiTests(LauncherCase):
         self.assertEqual(self.run_ui(spawn), 0)
         self.assertEqual(self.browser.urls, [self.server.url])
         self.assertTrue(sp.proc.terminated)
+
+
+    def test_non_oserror_on_write_falls_back_without_traceback(self):
+        sp = Spawner(self.clock)
+
+        class Weird(FakeStdin):
+            def write(self, data):
+                raise RuntimeError("weird")
+        orig = sp.__call__
+
+        def spawn(argv, **kw):
+            proc = orig(argv, **kw)
+            proc.stdin = Weird()
+            return proc
+        self.server.idle_seconds = 5.0
+        self.assertEqual(self.run_ui(spawn), 0)
+        self.assertEqual(self.browser.urls, [self.server.url])
+        self.assertTrue(sp.proc.terminated)
+
+    def test_kill_is_followed_by_wait(self):
+        import subprocess as sp_mod
+        events = []
+
+        class Stubborn(FakeProc):
+            def terminate(self):
+                events.append("terminate")
+
+            def kill(self):
+                events.append("kill")
+
+            def wait(self, timeout=None):
+                events.append("wait")
+                if "kill" not in events:
+                    raise sp_mod.TimeoutExpired("w", timeout)
+                return -9
+
+            def poll(self):
+                return None
+        self.server.idle_seconds = 5.0
+        self.run_ui(lambda argv, **kw: Stubborn(self.clock))
+        self.assertEqual(events[-1], "wait")
+        self.assertIn("kill", events)
+
+
+class RealPopenTests(unittest.TestCase):
+    def test_real_child_receives_url_on_stdin_only(self):
+        import sys
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "line.txt"
+            script = Path(d) / "window"
+            script.write_text("#!%s\nimport sys\nopen(%r, 'w').write(sys.stdin.readline())\n"
+                              "open(%r, 'a').write('|' + repr(sys.argv[1:]))\n"
+                              % (sys.executable, str(out), str(out)))
+            script.chmod(0o755)
+            server = UiServer(Path(d), token=URL_TOKEN)
+            browser = Browser()
+            err = io.StringIO()
+            with redirect_stderr(err):
+                rc = run_ui(server, script, open_browser=browser, notify_fn=Notes())
+            self.assertEqual(rc, 0)
+            line, argv = out.read_text().split("|")
+            self.assertEqual(line, server.url + "\n")
+            self.assertEqual(argv, "[]")
+            self.assertEqual(browser.urls, [])
 
 
 class FindWindowTests(unittest.TestCase):
