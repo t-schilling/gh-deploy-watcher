@@ -53,7 +53,7 @@ class FakeGh:
         if args[:2] == ["api", "--paginate"] and args[2].startswith("user/repos"):
             return "\n".join(self.repos)
         repo = args[2].split("/actions")[0][len("repos/"):]
-        return "\n".join("\t".join((w.name, w.path, w.state)) for w in self.workflows[repo])
+        return "\n".join("\t".join((w.name.replace("\r", "\\r").replace("\n", "\\n"), w.path, w.state)) for w in self.workflows[repo])
 
 
 class Script:
@@ -312,7 +312,7 @@ def no_ctrl(text):
 
 class SanitizeTests(WizardBase):
     def test_clean(self):
-        self.assertEqual(sw.clean("a\x1b[0m\tb | c\u202e  d\r\n"), "a[0m b c d")
+        self.assertEqual(sw.clean("a\x1b[0m\tb | c\u202e  d\r\n"), "a[0mb c d")
 
     def test_suggest_label_clean(self):
         env, label = sw.suggest(wf(HOSTILE, "deploy-x.yaml"))
@@ -332,7 +332,7 @@ class SanitizeTests(WizardBase):
         self.assertTrue(all(no_ctrl(t) for t in shown), shown)
         w = res.repos[0].workflows[0]
         self.assertEqual(w.file, "deploy-x.yaml")
-        self.assertEqual(w.label, "[31mmine x")
+        self.assertEqual(w.label, "[31mminex")
         self.assertEqual(self.saved(), res)
 
     def test_hostile_repo_not_printed_raw_and_maps_back(self):

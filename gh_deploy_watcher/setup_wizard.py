@@ -6,7 +6,8 @@ import os
 import re
 import shutil
 import subprocess
-from typing import Callable, Dict, List, Optional, Tuple
+import unicodedata
+from typing import Callable, Dict, List, Optional, Tuple, TypeVar
 
 from .config import VALID_ENVS, Config, RepoConfig, Workflow, save_config
 from .github import GhError, Runner, WorkflowInfo, list_repos, list_workflows, run_gh
@@ -17,7 +18,14 @@ _DEV_WORDS = ("dev", "development", "stg", "staging", "qa")
 _SKIP_NAMES = ("codeql", "dependabot updates")
 _SELECTION_RE = re.compile(r"^\d+(-\d+)?(\s*,\s*\d+(-\d+)?)*$")
 
+T = TypeVar("T")
 FzfRunner = Callable[[List[str], str], Tuple[int, str]]
+
+
+def clean(text: str) -> str:
+    """Make untrusted text safe to print and store: no control/format chars or '|'."""
+    kept = "".join(c for c in text if unicodedata.category(c)[0] != "C" and c != "|")
+    return " ".join(kept.split())
 
 
 def _strip_leading(name: str) -> str:
@@ -28,11 +36,12 @@ def _strip_leading(name: str) -> str:
 
 
 def suggest(workflow: WorkflowInfo) -> Tuple[str, str]:
-    name = _strip_leading(workflow.name)
+    name = _strip_leading(clean(workflow.name))
+    stem = clean(os.path.splitext(os.path.basename(workflow.path))[0])
     first = re.split(r"[^A-Za-z0-9]+", name, maxsplit=1)[0].lower()
     env = "prd" if first in _PRD_WORDS else "dev" if first in _DEV_WORDS else None
     if env is None:
-        return "dev", name
+        return "dev", name or stem
     prefix = re.match(r"[A-Za-z0-9]+", name).group(0)  # type: ignore[union-attr]
     rest = name[len(prefix):].lstrip(" :-\u2013\u2014")
     to = re.search(r"\bto\s+(.+)$", rest, re.IGNORECASE)
@@ -116,7 +125,20 @@ def pick(options: List[str], multi: bool, preselected: List[str],
 
 
 def _wf_option(w: WorkflowInfo) -> str:
-    return "%s [%s]" % (w.name, os.path.basename(w.path))
+    return "%s [%s]" % (clean(w.name), clean(os.path.basename(w.path)))
+
+
+def _unique_map(items: List[T], display: Callable[[T], str]) -> Dict[str, T]:
+    """Map cleaned display strings back to the raw items, keeping order and uniqueness."""
+    result: Dict[str, T] = {}
+    for item in items:
+        text = display(item)
+        base, n = text, 1
+        while text in result:
+            n += 1
+            text = "%s #%d" % (base, n)
+        result[text] = item
+    return result
 
 
 def _ask_env(ask: Callable[[str], str], default: str) -> str:
@@ -130,25 +152,26 @@ def _ask_env(ask: Callable[[str], str], default: str) -> str:
 
 def _add(config: Config, runner: Runner, picker, ask, out) -> Config:
     new = copy.deepcopy(config)
-    repos = picker(list_repos(runner), True, [])
-    for repo in repos:
+    repo_map = _unique_map(list_repos(runner), clean)
+    for key in picker(list(repo_map), True, []):
+        repo = repo_map[key]
         have = next((r for r in new.repos if r.repo == repo), None)
         known = {w.file for w in have.workflows} if have else set()
         infos = [w for w in list_workflows(repo, runner)
                  if os.path.basename(w.path) not in known]
         if not infos:
-            out("%s: no new workflows." % repo)
+            out("%s: no new workflows." % clean(repo))
             continue
-        by_option: Dict[str, WorkflowInfo] = {_wf_option(w): w for w in infos}
-        defaults = [_wf_option(w) for w in preselect(infos)]
-        chosen = picker(list(by_option), True, defaults)
+        by_option = _unique_map(infos, _wf_option)
+        wanted = [id(w) for w in preselect(infos)]
+        defaults = [o for o, w in by_option.items() if id(w) in wanted]
         added: List[Workflow] = []
-        for option in chosen:
+        for option in picker(list(by_option), True, defaults):
             info = by_option[option]
             env, label = suggest(info)
-            label = ask("Label for %s [%s]: " % (option, label)).strip() or label
+            typed = clean(ask("Label for %s [%s]: " % (option, label)))
             env = _ask_env(ask, env)
-            added.append(Workflow(os.path.basename(info.path), env, label))
+            added.append(Workflow(os.path.basename(info.path), env, typed or label))
         if not added:
             continue
         if have is None:
@@ -160,14 +183,14 @@ def _add(config: Config, runner: Runner, picker, ask, out) -> Config:
 
 def _remove(config: Config, picker) -> Config:
     new = copy.deepcopy(config)
-    options = ["%s :: %s (%s)" % (r.repo, w.file, w.label)
-               for r in new.repos for w in r.workflows]
+    pairs = [(r, w) for r in new.repos for w in r.workflows]
+    options = _unique_map(pairs, lambda p: "%s :: %s (%s)" % (
+        clean(p[0].repo), clean(p[1].file), clean(p[1].label)))
     if not options:
         return new
-    chosen = set(picker(options, True, []))
+    chosen = [id(options[o][1]) for o in picker(list(options), True, [])]
     for r in new.repos:
-        r.workflows = [w for w in r.workflows
-                       if "%s :: %s (%s)" % (r.repo, w.file, w.label) not in chosen]
+        r.workflows = [w for w in r.workflows if id(w) not in chosen]
     new.repos = [r for r in new.repos if r.workflows]
     return new
 
@@ -176,9 +199,9 @@ def _list(config: Config, out: Callable[[str], None]) -> None:
     if not config.repos:
         out("No repos configured.")
     for r in config.repos:
-        out(r.repo)
+        out(clean(r.repo))
         for w in r.workflows:
-            out("  [%s] %s (%s)" % (w.env, w.label, w.file))
+            out("  [%s] %s (%s)" % (clean(w.env), clean(w.label), clean(w.file)))
 
 
 def run_wizard(config: Config, runner: Runner = run_gh, picker=pick,
@@ -205,7 +228,7 @@ def run_wizard(config: Config, runner: Runner = run_gh, picker=pick,
                 else:
                     out("Please enter 1, 2, 3 or 4.")
             except GhError as exc:
-                out("GitHub error: %s" % (exc.message or exc))
+                out("GitHub error: %s" % clean(str(exc.message or exc)))
     except (KeyboardInterrupt, EOFError):
         out("Aborted; nothing saved.")
         return start
