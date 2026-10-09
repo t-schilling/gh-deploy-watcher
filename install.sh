@@ -59,26 +59,34 @@ while [ $# -gt 0 ]; do
   shift
 done
 
+# True when we may prompt: stdin is a terminal (GH_DEPLOY_WATCHER_INTERACTIVE=1 is a test hook).
+interactive() {
+  [ "$ASSUME_YES" -eq 0 ] && { [ -t 0 ] || [ "${GH_DEPLOY_WATCHER_INTERACTIVE:-}" = "1" ]; }
+}
+
+expand_tilde() {
+  case "$1" in
+    "~") printf '%s' "$HOME" ;;
+    "~/"*) printf '%s' "$HOME/${1#\~/}" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
 detect_plugin_dir() {
   local found=""
-  if [ -n "$PLUGIN_DIR" ]; then
-    return 0
+  if [ -z "$PLUGIN_DIR" ] && command -v defaults >/dev/null 2>&1; then
+    PLUGIN_DIR="$(defaults read com.ameba.SwiftBar PluginDirectory 2>/dev/null || true)"
   fi
-  if command -v defaults >/dev/null 2>&1; then
-    found="$(defaults read com.ameba.SwiftBar PluginDirectory 2>/dev/null || true)"
-  fi
-  if [ -n "$found" ]; then
+  if [ -z "$PLUGIN_DIR" ]; then
+    interactive || die "could not detect the SwiftBar plugin folder. Launch SwiftBar once and pick a folder, then re-run with --plugin-dir <that folder>."
+    info "Could not detect the SwiftBar plugin folder."
+    info "Launch SwiftBar once and choose a plugin folder when it asks."
+    printf "Enter the plugin folder SwiftBar uses: "
+    read -r found || die "no folder given"
+    [ -n "$found" ] || die "no folder given"
     PLUGIN_DIR="$found"
-    return 0
   fi
-  if [ "$ASSUME_YES" -eq 1 ] || [ ! -t 0 ]; then
-    die "could not detect the SwiftBar plugin folder. Launch SwiftBar once and pick a folder, then re-run with --plugin-dir <that folder>."
-  fi
-  info "Could not detect the SwiftBar plugin folder."
-  info "Launch SwiftBar once and choose a plugin folder when it asks."
-  read -r -p "Enter the plugin folder SwiftBar uses: " found
-  [ -n "$found" ] || die "no folder given"
-  PLUGIN_DIR="${found/#\~/$HOME}"
+  PLUGIN_DIR="$(expand_tilde "$PLUGIN_DIR")"
 }
 
 link_path() { printf '%s/%s' "$PLUGIN_DIR" "$ENTRY_NAME"; }
@@ -86,9 +94,15 @@ link_path() { printf '%s/%s' "$PLUGIN_DIR" "$ENTRY_NAME"; }
 if [ "$UNINSTALL" -eq 1 ]; then
   detect_plugin_dir
   target="$(link_path)"
-  if [ -L "$target" ]; then
+  if [ -L "$target" ] && [ "$(readlink "$target")" = "$ENTRY" ]; then
     run rm "$target"
-    info "Removed symlink $target. Your config in ~/.config/gh-deploy-watcher/ was left untouched."
+    if [ "$DRY_RUN" -eq 1 ]; then
+      info "Would remove symlink $target. Your config in ~/.config/gh-deploy-watcher/ is never touched."
+    else
+      info "Removed symlink $target. Your config in ~/.config/gh-deploy-watcher/ was left untouched."
+    fi
+  elif [ -L "$target" ]; then
+    info "$target is a symlink that points elsewhere ($(readlink "$target")), not one made by this installer; leaving it alone."
   elif [ -e "$target" ]; then
     info "$target is a regular file, not a symlink made by this installer; leaving it alone."
   else
@@ -170,13 +184,22 @@ if [ ! -x "$ENTRY" ]; then
   CHANGED+=("made the entrypoint executable")
 fi
 
-# 8. setup wizard
-if [ "$ASSUME_YES" -eq 1 ] || [ "$DRY_RUN" -eq 1 ] || [ ! -t 0 ]; then
-  info "Next, choose which repos to watch by running:"
-  info "  $ENTRY setup"
+# 8. setup wizard (offered; never aborts the installer)
+answer="y"
+if interactive && [ "$DRY_RUN" -eq 0 ]; then
+  printf "Run setup now? [Y/n] "
+  read -r answer || answer="n"
+  [ -n "$answer" ] || answer="y"
 else
-  run "$ENTRY" setup
+  answer="n"
 fi
+case "$answer" in
+  [Yy]*) run "$ENTRY" setup || info "setup did not finish; re-run it later with: $ENTRY setup" ;;
+  *)
+    info "Next, choose which repos to watch by running:"
+    info "  $ENTRY setup"
+    ;;
+esac
 
 info ""
 info "Summary"
