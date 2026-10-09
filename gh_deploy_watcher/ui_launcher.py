@@ -33,6 +33,10 @@ def _stop(proc: Any) -> None:
         proc.wait(timeout=2)
     except subprocess.TimeoutExpired:
         proc.kill()
+        try:
+            proc.wait(timeout=2)  # reap, no zombie
+        except (subprocess.TimeoutExpired, OSError):
+            pass
     except OSError:
         pass
 
@@ -51,10 +55,10 @@ def run_ui(server: UiServer, window: Optional[Path], spawn: Callable[..., Any] =
                 # lock fd can never leak into a window that outlives the server.
                 proc = spawn([str(window)], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
                              stderr=subprocess.DEVNULL, close_fds=True)
-                proc.stdin.write(server.url + "\n")  # stdin only: never argv or env
+                proc.stdin.write((server.url + "\n").encode("utf-8"))  # binary pipe; never argv or env
                 proc.stdin.flush()
                 proc.stdin.close()
-            except (OSError, ValueError):
+            except Exception:  # any failure here means: no usable window
                 if proc is not None:
                     _stop(proc)
                 proc = None
