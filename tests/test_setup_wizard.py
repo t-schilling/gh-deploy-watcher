@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import unicodedata
 import unittest
 
 from gh_deploy_watcher import setup_wizard as sw
@@ -300,6 +301,62 @@ class PickTests(unittest.TestCase):
     def test_filter_without_matches_reprompts(self):
         res, _ = self.run_pick(["zzz", "/", "1"])
         self.assertEqual(res, ["acme/api"])
+
+
+HOSTILE = "PRD\x1b[2J\x1b]0;pwn\x07 | Deploy\r\nto\u202e EU"
+
+
+def no_ctrl(text):
+    return all(unicodedata.category(c)[0] != "C" for c in text)
+
+
+class SanitizeTests(WizardBase):
+    def test_clean(self):
+        self.assertEqual(sw.clean("a\x1b[0m\tb | c\u202e  d\r\n"), "a[0m b c d")
+
+    def test_suggest_label_clean(self):
+        env, label = sw.suggest(wf(HOSTILE, "deploy-x.yaml"))
+        self.assertEqual(env, "prd")
+        self.assertTrue(no_ctrl(label) and "|" not in label)
+
+    def test_empty_label_falls_back_to_file_stem(self):
+        self.assertEqual(sw.suggest(wf("\U0001f680", "deploy-prd-eu.yaml")),
+                         ("dev", "deploy-prd-eu"))
+        self.assertEqual(sw.suggest(wf("\x1b\x07", "my\x1bflow.yml"))[1], "myflow")
+
+    def test_hostile_workflow_end_to_end(self):
+        gh = FakeGh(["acme/new"], {"acme/new": [wf(HOSTILE, "deploy-x.yaml")]})
+        picker = Picks(first(1), defaults)
+        res, ask = self.run_wiz(Config(), gh, picker, ["1", "\x1b[31mmine\r|x", "", "4"])
+        shown = [o for step in picker.seen for o in step[0]] + self.lines + ask.prompts
+        self.assertTrue(all(no_ctrl(t) for t in shown), shown)
+        w = res.repos[0].workflows[0]
+        self.assertEqual(w.file, "deploy-x.yaml")
+        self.assertEqual(w.label, "[31mmine x")
+        self.assertEqual(self.saved(), res)
+
+    def test_hostile_repo_not_printed_raw_and_maps_back(self):
+        bad = "acme/\x1b[2Jevil"
+        gh = FakeGh(["acme/ok", bad], {bad: [wf("Deploy", "deploy.yaml")]})
+        picker = Picks(containing("evil"), defaults)
+        res, ask = self.run_wiz(Config(), gh, picker, ["1", "", "", "3", "4"])
+        self.assertTrue(all(no_ctrl(o) for o in picker.seen[0][0]))
+        self.assertEqual(res.repos[0].repo, bad)  # raw identifier stored
+        self.assertIn("repos/%s/actions/workflows" % bad, [c[2] for c in gh.calls])
+        self.assertTrue(all(no_ctrl(l) for l in self.lines), self.lines)
+
+    def test_remove_and_list_clean_existing_config(self):
+        cfg = Config([RepoConfig("acme/a", [Workflow("a.yaml", "prd", "L\x1b[2J1")])])
+        picker = Picks(first(1))
+        res, _ = self.run_wiz(cfg, FakeGh([], {}), picker, ["3", "2", "4"])
+        self.assertTrue(all(no_ctrl(o) for o in picker.seen[0][0]))
+        self.assertTrue(all(no_ctrl(l) for l in self.lines))
+        self.assertEqual(res.repos, [])
+
+    def test_gh_error_message_cleaned(self):
+        gh = FakeGh([], {}, error=GhError("other", "bad\x1b[2J thing"))
+        self.run_wiz(Config(), gh, Picks(), ["1", "4"])
+        self.assertTrue(all(no_ctrl(l) for l in self.lines))
 
 
 if __name__ == "__main__":
