@@ -1,14 +1,16 @@
 """Polling, menu actions and the plugin's command-line dispatch."""
 from __future__ import annotations
 
+import fcntl
 import os
 import re
 import sys
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
-from typing import Callable, Dict, List, Optional, TextIO, Tuple
+from typing import Callable, Dict, Iterator, List, Optional, TextIO, Tuple
 
-from gh_deploy_watcher.config import Config, ConfigError, load_config
+from gh_deploy_watcher.config import Config, ConfigError, config_dir, load_config
 from gh_deploy_watcher.github import GhError, Runner, latest_run, rerun_failed, rerun_failed_args, run_gh
 from gh_deploy_watcher.model import Run, classify, env_visible, new_failures, run_ref, workflow_key
 from gh_deploy_watcher.notify import confirm, notify
@@ -17,7 +19,7 @@ from gh_deploy_watcher.state import VALID_FILTERS, State, load_state, save_state
 
 _GLOBAL_KINDS = ("auth", "missing", "network", "rate_limit")
 _NOTIFIED_CAP = 200
-_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+_REPO_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*")
 
 NotifyFn = Callable[[str, str], None]
 ConfirmFn = Callable[[str], bool]
@@ -66,23 +68,59 @@ def poll(config: Config, state: State, runner: Runner, now: float,
     return state, keys, error
 
 
-def _poll_and_notify(config: Config, state: State, runner: Runner, notify_fn: NotifyFn,
-                     now: float, baseline: bool = False) -> Optional[str]:
+@contextmanager
+def _locked() -> Iterator[None]:
+    """Exclusive lock for state read-modify-write; never held across gh calls."""
+    d = config_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    with open(str(d / "state.lock"), "a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
+
+
+def _update(**fields: object) -> None:
+    """Locked read-modify-write of only the given state fields."""
+    with _locked():
+        state = load_state()
+        for k, v in fields.items():
+            setattr(state, k, v)
+        save_state(state)
+
+
+def _refresh(config: Config, runner: Runner, notify_fn: NotifyFn, now: float,
+             baseline: bool = False) -> Optional[str]:
+    """Poll off-lock, merge into the on-disk state under lock, save, then notify."""
+    state = load_state()
+    before = dict(state.last)
     _, keys, error = poll(config, state, runner, now, baseline)
     labels = {workflow_key(r.repo, w.file): (r.repo, w.label)
               for r in config.repos for w in r.workflows}
-    for key in keys:
-        run = _cached_run(state.last.get(key))
-        if run is None:
-            continue
-        repo, label = labels.get(key, ("", key))
+    to_notify: List[Tuple[str, str]] = []
+    with _locked():
+        disk = load_state()
+        for k, v in state.last.items():
+            if before.get(k) != v:
+                disk.last[k] = v
+        disk.last_poll = now
+        disk.notified.extend(i for i in state.notified if i not in disk.notified)
+        for key in keys:
+            run = _cached_run(state.last.get(key))
+            if run is None or run.id in disk.notified:
+                continue
+            disk.notified.append(run.id)
+            repo, label = labels.get(key, ("", key))
+            to_notify.append(("Deploy failed: %s" % label,
+                              "%s \u00b7 %s" % (repo, run_ref(run.title))))
+        del disk.notified[:-_NOTIFIED_CAP]
+        save_state(disk)
+    for title, message in to_notify:  # only after the save succeeded: at most once
         try:
-            notify_fn("Deploy failed: %s" % label, "%s · %s" % (repo, run_ref(run.title)))
+            notify_fn(title, message)
         except Exception:
             pass
-        state.notified.append(run.id)
-    del state.notified[:-_NOTIFIED_CAP]
-    save_state(state)
     return error
 
 
@@ -95,12 +133,12 @@ def rerun(repo: str, run_id: object, env: str, dry_run: bool = False,
           confirm_fn: ConfirmFn = confirm, runner: Runner = run_gh,
           notify_fn: NotifyFn = notify, now: Optional[float] = None,
           out: Optional[TextIO] = None) -> int:
-    if not isinstance(repo, str) or not _REPO_RE.match(repo):
+    if not isinstance(repo, str) or not _REPO_RE.fullmatch(repo):
         return _fail("invalid repo %r: expected owner/name" % (repo,))
-    try:
-        rid = int(run_id)  # type: ignore[call-overload]
-    except (TypeError, ValueError):
-        return _fail("invalid run id %r: expected an integer" % (run_id,))
+    text = run_id if isinstance(run_id, str) else str(run_id)
+    if not (text.isascii() and text.isdigit() and int(text) > 0):
+        return _fail("invalid run id %r: expected a positive integer" % (run_id,))
+    rid = int(text)
     if env not in ("prd", "dev"):
         return _fail("invalid env %r: expected prd or dev" % (env,))
     if dry_run:
@@ -117,8 +155,7 @@ def rerun(repo: str, run_id: object, env: str, dry_run: bool = False,
         except Exception:
             pass
         return 1
-    config, state = load_config(), load_state()
-    _poll_and_notify(config, state, runner, notify_fn, time.time() if now is None else now)
+    _refresh(load_config(), runner, notify_fn, time.time() if now is None else now)
     return 0
 
 
@@ -130,7 +167,7 @@ def main(argv: List[str], script_path: Optional[str] = None, runner: Runner = ru
     ts = time.time() if now is None else now
     try:
         return _dispatch(list(argv), script, runner, notify_fn, confirm_fn, ts, out)
-    except (ConfigError, ValueError) as exc:
+    except (ConfigError, ValueError, OSError) as exc:
         out.write(error_menu(str(exc)))
         return 0
 
@@ -138,10 +175,11 @@ def main(argv: List[str], script_path: Optional[str] = None, runner: Runner = ru
 def _dispatch(argv: List[str], script: str, runner: Runner, notify_fn: NotifyFn,
               confirm_fn: ConfirmFn, ts: float, out: TextIO) -> int:
     if not argv:
-        config, state = load_config(), load_state()
+        config = load_config()
         error = None
-        if state.polling:
-            error = _poll_and_notify(config, state, runner, notify_fn, ts)
+        if load_state().polling:
+            error = _refresh(config, runner, notify_fn, ts)
+        state = load_state()
         out.write(render_menu(config, state, error, datetime.fromtimestamp(ts, timezone.utc), script))
         return 0
     cmd, args = argv[0], argv[1:]
@@ -157,16 +195,15 @@ def _dispatch(argv: List[str], script: str, runner: Runner, notify_fn: NotifyFn,
         return _fail("invalid filter %r: expected one of %s" % (args[:1], ", ".join(VALID_FILTERS)))
     if cmd not in ("start", "stop", "filter", "refresh"):
         return _fail("unknown command %r" % cmd)
-    config, state = load_config(), load_state()
+    config = load_config()
     if cmd == "stop":
-        state.polling = False
-        save_state(state)
+        _update(polling=False)
     elif cmd == "start":
-        state.polling = True
-        _poll_and_notify(config, state, runner, notify_fn, ts, baseline=True)
+        _update(polling=True)
+        _refresh(config, runner, notify_fn, ts, baseline=True)
     elif cmd == "filter":
-        state.filter = args[0]
-        _poll_and_notify(config, state, runner, notify_fn, ts)
+        _update(filter=args[0])
+        _refresh(config, runner, notify_fn, ts)
     else:
-        _poll_and_notify(config, state, runner, notify_fn, ts)
+        _refresh(config, runner, notify_fn, ts)
     return 0

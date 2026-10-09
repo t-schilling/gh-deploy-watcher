@@ -38,7 +38,9 @@ def run_json(id, conclusion="success", status="completed"):
 class FakeRunner:
     """results: {(repo, workflow): json text | Exception | callable}"""
 
-    def __init__(self, results=None, default=None):
+    def __init__(self, results=None, default=None, ids_from=None, conclusion="failure"):
+        self.ids_from = ids_from  # distinct run id per workflow, as on GitHub
+        self.conclusion = conclusion
         self.calls = []
         self.results = results or {}
         self.default = default if default is not None else run_json(1)
@@ -48,6 +50,10 @@ class FakeRunner:
         if args[0] == "run" and args[1] == "list":
             key = (args[3], args[5])
             r = self.results.get(key, self.default)
+            if self.ids_from is not None and key not in self.results:
+                order = [("acme/api", "deploy-prd.yaml"), ("acme/api", "deploy-dev.yaml"),
+                         ("acme/web", "deploy-prd.yaml"), ("acme/web", "deploy-dev.yaml")]
+                r = run_json(self.ids_from + order.index(key), self.conclusion)
             if callable(r):
                 r = r()
             if isinstance(r, Exception):
@@ -132,22 +138,29 @@ class PollTests(unittest.TestCase):
     def test_corrupt_cached_entry_does_not_crash(self):
         s = State(last={PRD: {"id": "nope"}})
         r = FakeRunner(default=GhError("network", "down"))
-        actions.poll(cfg(), s, r, NOW)  # must not raise
+        st, keys, err = actions.poll(cfg(), s, r, NOW)  # must not raise
+        self.assertEqual(st.last[PRD], {"id": "nope"})  # global error keeps cache
+        self.assertEqual(err, "down")
         s2 = State(last={PRD: {"garbage": 1}})
-        actions.poll(cfg(), s2, FakeRunner(default=run_json(2, "failure")), NOW)
+        st2, keys2, _ = actions.poll(cfg(), s2, FakeRunner(default=run_json(2, "failure")), NOW)
+        self.assertEqual(st2.last[PRD]["id"], 2)
+        self.assertIn(PRD, keys2)
 
     def test_notify_once_then_not_again(self):
-        r = FakeRunner(default=run_json(3, "failure"))
+        r = FakeRunner(ids_from=3)
         st, keys, _ = actions.poll(cfg(), State(), r, NOW)
         self.assertEqual(len(keys), 4)
-        st.notified = [3]
+        st.notified = [3, 4, 5, 6]  # poll() no longer records ids; _commit does
         _, keys2, _ = actions.poll(cfg(), st, r, NOW)
         self.assertEqual(keys2, [])
 
     def test_hidden_env_does_not_notify(self):
         r = FakeRunner(default=run_json(3, "failure"))
         _, keys, _ = actions.poll(cfg(), State(filter="prd"), r, NOW)
-        self.assertTrue(all(k.endswith("deploy-prd.yaml") for k in keys))
+        self.assertTrue(keys)
+        self.assertIn(PRD, keys)
+        self.assertNotIn(DEV, keys)
+        self.assertNotIn("acme/web/deploy-dev.yaml", keys)
 
     def test_baseline_marks_notified_no_keys(self):
         r = FakeRunner(default=run_json(3, "failure"))
@@ -195,7 +208,7 @@ class MainTests(ActionBase):
 
     def test_polling_on_polls_notifies_once(self):
         save_state(State(polling=True))
-        r = FakeRunner(default=run_json(3, "failure"))
+        r = FakeRunner(ids_from=3)
         self.assertEqual(self.main([], r), 0)
         n = len(self.notes.items)
         self.assertEqual(n, 4)
@@ -232,12 +245,12 @@ class MainTests(ActionBase):
         self.assertIn("please log in", self.out.getvalue())
 
     def test_start_baseline_then_new_failure_notifies(self):
-        r = FakeRunner(default=run_json(3, "failure"))
+        r = FakeRunner(ids_from=3)
         self.assertEqual(self.main(["start"], r), 0)
         self.assertEqual(self.out.getvalue(), "")
         self.assertEqual(self.notes.items, [])
         self.assertTrue(load_state().polling)
-        r2 = FakeRunner(default=run_json(4, "failure"))
+        r2 = FakeRunner(ids_from=10)
         self.main([], r2)
         self.assertEqual(len(self.notes.items), 4)
 
@@ -280,6 +293,78 @@ class MainTests(ActionBase):
             self.assertEqual(self.main(["bogus"], FakeRunner()), 2)
 
 
+class ConcurrencyTests(ActionBase):
+    def test_lost_pause_and_filter(self):
+        save_state(State(polling=True))
+        def mid_poll():
+            self.main(["stop"], FakeRunner())
+            st = load_state()
+            st.filter = "prd"
+            save_state(st)
+            return run_json(1)
+        self.main([], FakeRunner(default=mid_poll))
+        st = load_state()
+        self.assertFalse(st.polling)
+        self.assertEqual(st.filter, "prd")
+        self.assertEqual(st.last[PRD]["id"], 1)
+
+    def test_double_notify_once_total(self):
+        save_state(State(polling=True))
+        n1, n2 = Notes(), Notes()
+        def other():
+            # second poller runs entirely while the first is mid-poll
+            self.main([], FakeRunner(ids_from=3), notify=n2)
+            return run_json(3, "failure")
+        self.main([], FakeRunner(default=other, ids_from=None), notify=n1)
+        # n1's only call that is not overridden is "other", which re-enters for all 4
+        self.assertEqual(len(n1.items) + len(n2.items), 4)
+        self.assertEqual(len(n2.items), 4)  # committed first; the stale poller saw its ids
+
+    def test_notified_not_lost_by_filtered_poller(self):
+        save_state(State(polling=True, filter="prd"))
+        def mid_poll():
+            st = load_state()
+            st.notified = [77]
+            save_state(st)
+            return run_json(1)
+        self.main([], FakeRunner(default=mid_poll))
+        self.assertIn(77, load_state().notified)
+
+    def test_save_failure_menu_no_notify(self):
+        save_state(State(polling=True))
+        from unittest import mock
+        with mock.patch.object(actions, "save_state", side_effect=PermissionError("denied")):
+            rc = self.main([], FakeRunner(ids_from=3))
+        self.assertEqual(rc, 0)
+        self.assertTrue(self.out.getvalue().startswith("\u26a0"))
+        self.assertIn("denied", self.out.getvalue())
+        self.assertNotIn("Traceback", self.out.getvalue())
+        self.assertEqual(self.notes.items, [])
+
+    def test_save_happens_before_notify(self):
+        save_state(State(polling=True))
+        from unittest import mock
+        order = []
+        real = actions.save_state
+        def spy(*a, **k):
+            order.append("save")
+            return real(*a, **k)
+        with mock.patch.object(actions, "save_state", side_effect=spy):
+            self.main([], FakeRunner(ids_from=3),
+                      notify=lambda t, m: order.append("notify"))
+        self.assertEqual(order[0], "save")
+        self.assertLess(order.index("save"), order.index("notify"))
+        self.assertEqual(order.count("notify"), 4)
+
+    def test_lock_released_after_exception(self):
+        with self.assertRaises(RuntimeError):
+            with actions._locked():
+                raise RuntimeError("boom")
+        import fcntl
+        with open(os.path.join(self._tmp.name, "state.lock"), "a") as f:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)  # would raise if still held
+
+
 class RerunTests(ActionBase):
     CMD = ["run", "rerun", "123", "--failed", "--repo", "acme/api"]
 
@@ -316,7 +401,11 @@ class RerunTests(ActionBase):
 
     def test_bad_args_exit_2(self):
         for argv in (["rerun", "nope", "1", "prd"], ["rerun", "acme/api", "x", "prd"],
-                     ["rerun", "acme/api", "1", "qa"], ["rerun", "acme/api"]):
+                     ["rerun", "acme/api", "1", "qa"], ["rerun", "acme/api"],
+                     ["rerun", "acme/api\n", "1", "prd"], ["rerun", "acme/api", "-5", "dev"],
+                     ["rerun", "acme/api", " 12 ", "dev"], ["rerun", "acme/api", "1_0", "dev"],
+                     ["rerun", "acme/api", "0", "dev"], ["rerun", "-x/api", "1", "dev"],
+                     ["rerun", "acme/..", "1", "dev"]):
             r = FakeRunner()
             with redirect_stderr(io.StringIO()):
                 self.assertEqual(self.main(argv, r), 2, argv)
