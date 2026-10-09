@@ -7,11 +7,17 @@ import subprocess
 from dataclasses import dataclass
 from typing import Callable, List, Optional
 
-from .model import Run
+from .model import Run, parse_attempt
 
 _EXTRA_PATH = ["/opt/homebrew/bin", "/usr/local/bin"]
 _TIMEOUT = 30
-_RUN_FIELDS = "databaseId,status,conclusion,createdAt,displayTitle,url,headBranch"
+_RUN_FIELDS = "databaseId,status,conclusion,createdAt,displayTitle,url,headBranch,attempt"
+
+
+_NETWORK_HINTS = (
+    "could not resolve host", "timeout", "network", "error connecting to",
+    "check your internet connection", "no such host", "connection refused", "tls handshake",
+)
 
 
 class GhError(Exception):
@@ -34,14 +40,14 @@ def classify_error(returncode: int, stderr: str) -> str:
         return "auth"
     if "rate limit" in low:
         return "rate_limit"
-    if "could not resolve host" in low or "timeout" in low or "network" in low:
+    if any(s in low for s in _NETWORK_HINTS):
         return "network"
     return "other"
 
 
 def run_gh(args: List[str]) -> str:
     env = dict(os.environ)
-    parts = _EXTRA_PATH + [p for p in env.get("PATH", "").split(os.pathsep) if p]
+    parts = [p for p in env.get("PATH", "").split(os.pathsep) if p] + _EXTRA_PATH
     env["PATH"] = os.pathsep.join(parts)
     try:
         proc = subprocess.run(
@@ -80,6 +86,7 @@ def latest_run(repo: str, workflow_file: str, runner: Runner = run_gh) -> Option
             title=d["displayTitle"],
             url=d["url"],
             branch=d["headBranch"],
+            attempt=parse_attempt(d.get("attempt")),
         )
     except (ValueError, KeyError, TypeError, IndexError) as e:
         raise GhError("other", "unexpected gh output: %s" % e)

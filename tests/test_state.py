@@ -50,7 +50,7 @@ class StateTests(unittest.TestCase):
         self.assertEqual((s.last, s.notified), ({}, []))
 
     def test_roundtrip(self):
-        s = State(True, "prd", {"acme/api/deploy.yaml": {"id": 7}, "x": {"error": "boom"}}, 12.5, [1, 2])
+        s = State(True, "prd", {"acme/api/deploy.yaml": {"id": 7}, "x": {"error": "boom"}}, 12.5, ["1:1", "2:1"])
         save_state(s, self.path)
         self.assertEqual(load_state(self.path), s)
 

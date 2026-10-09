@@ -11,6 +11,12 @@ _PR_RE = re.compile(r"(?:pull request|PR)\s*#(\d+)", re.IGNORECASE)
 _REF_MAX = 30
 
 
+def parse_attempt(value: Any) -> int:
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return 1
+
+
 @dataclass
 class Run:
     id: int
@@ -20,6 +26,11 @@ class Run:
     title: str
     url: str
     branch: str
+    attempt: int = 1
+
+    @property
+    def notify_key(self) -> str:
+        return "%d:%d" % (self.id, self.attempt)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -34,6 +45,7 @@ class Run:
             title=d["title"],
             url=d["url"],
             branch=d["branch"],
+            attempt=parse_attempt(d.get("attempt")),
         )
 
 
@@ -66,15 +78,17 @@ def overall_state(items: List[Tuple[str, str]], polling: bool, error: Optional[s
         return "prd_failed"
     if any(env == "dev" and c == "failed" for env, c in items):
         return "dev_failed"
+    if any(c == "error" for _, c in items):
+        return "error"
     if any(c == "running" for _, c in items):
         return "running"
     return "ok"
 
 
-def new_failures(current: Dict[str, Run], notified: Set[int], baseline: bool) -> List[str]:
+def new_failures(current: Dict[str, Run], notified: Set[str], baseline: bool) -> List[str]:
     if baseline:
         return []
-    return [k for k, r in current.items() if classify(r) == "failed" and r.id not in notified]
+    return [k for k, r in current.items() if classify(r) == "failed" and r.notify_key not in notified]
 
 
 def age_text(created_at: str, now: datetime) -> str:

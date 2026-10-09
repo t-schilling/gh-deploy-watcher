@@ -86,7 +86,7 @@ def _parse(data: Any) -> Config:
 def load_config(path: Optional[Path] = None) -> Config:
     path = Path(path) if path else _default_path()
     try:
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return Config([])
     except OSError as exc:
@@ -114,5 +114,5 @@ def save_config(config: Config, path: Optional[Path] = None) -> None:
         ]
     }
     tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2) + "\n")
+    tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     os.replace(str(tmp), str(path))

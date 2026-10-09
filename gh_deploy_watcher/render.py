@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
 from gh_deploy_watcher.config import Config, Workflow, config_dir
@@ -97,7 +98,7 @@ def _workflow_lines(repo: str, wf: Workflow, entry: Optional[dict], now: datetim
     if kind == "unreadable":
         return ["⚪ %s   unreadable" % label], (wf.env, "unknown")
     if kind == "error":
-        return ["⚠ %s   error" % label, "--%s | color=red" % msg], (wf.env, "unknown")
+        return ["⚠ %s   error" % label, "--%s | color=red" % msg], (wf.env, "error")
     assert run is not None
     cls = classify(run)
     head = "%s %s   %s · %s ago   %s" % (
@@ -114,8 +115,20 @@ def _workflow_lines(repo: str, wf: Workflow, entry: Optional[dict], now: datetim
     return lines, (wf.env, cls)
 
 
+def _open_config_line(config_path: Optional[Path]) -> Optional[str]:
+    """The 'Open config' item, only when the file exists and the path is safe."""
+    path = Path(config_path) if config_path else config_dir() / "config.json"
+    try:
+        if not path.exists():
+            return None
+        _check_arg(str(path))
+    except (OSError, ValueError):
+        return None
+    return "Open config | bash=/usr/bin/open param1=%s terminal=false" % str(path).replace(" ", "%20")
+
+
 def render_menu(config: Config, state: State, error: Optional[str], now: datetime,
-                script_path: str) -> str:
+                script_path: str, config_path: Optional[Path] = None) -> str:
     _check_arg(script_path)
     body: List[str] = []
     items: List[Tuple[str, str]] = []
@@ -149,11 +162,32 @@ def render_menu(config: Config, state: State, error: Optional[str], now: datetim
     out.extend(body)
     out.append("Poll now | " + _action(script_path, "refresh"))
     out.append("Add / remove repos… | bash='%s' param1=setup terminal=true" % script_path)
-    out.append("Open config | bash=/usr/bin/open param1=%s terminal=false"
-               % str(config_dir() / "config.json").replace(" ", "%20"))
+    open_line = _open_config_line(config_path)
+    if open_line:
+        out.append(open_line)
     return "\n".join(out) + "\n"
 
 
-def error_menu(reason: str) -> str:
-    """Minimal warning menu for problems that prevent a normal render."""
-    return "%s\n---\n%s\n" % (_ICONS["error"], sanitize(reason))
+def error_menu(reason: str, script_path: Optional[str] = None,
+               config_path: Optional[Path] = None) -> str:
+    """Warning menu for problems that prevent a normal render.
+
+    With script_path it also offers the actions that let the user recover
+    without a terminal; an unsafe script path degrades to the plain menu.
+    """
+    lines = [_ICONS["error"], "---", sanitize(reason)]
+    if script_path:
+        try:
+            extra = [
+                "Stop polling | " + _action(script_path, "stop"),
+                "Add / remove repos… | bash='%s' param1=setup terminal=true" % _check_arg(script_path),
+            ]
+        except ValueError:
+            extra = []
+        if extra:
+            lines.append("---")
+            lines.extend(extra)
+            open_line = _open_config_line(config_path) if config_path else None
+            if open_line:
+                lines.append(open_line)
+    return "\n".join(lines) + "\n"
