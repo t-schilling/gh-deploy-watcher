@@ -589,6 +589,46 @@ class LockTests(unittest.TestCase):
             self.assertIsNotNone(third)
             third.close()
 
+    def test_other_oserror_closes_handle_and_raises(self):
+        from unittest import mock
+        opened = []
+        real_open = open
+
+        def spy(*a, **k):
+            h = real_open(*a, **k)
+            opened.append(h)
+            return h
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch("gh_deploy_watcher.ui_server.open", spy, create=True), \
+                mock.patch("gh_deploy_watcher.ui_server.fcntl.flock", side_effect=OSError(5, "io")):
+            with self.assertRaises(OSError):
+                try_lock_instance(Path(d))
+        self.assertEqual(len(opened), 1)
+        self.assertTrue(opened[0].closed)
+
+
+class InflightTests(unittest.TestCase):
+    def _httpd(self):
+        from http.server import BaseHTTPRequestHandler
+        from gh_deploy_watcher.ui_server import _Httpd
+        httpd = _Httpd(("127.0.0.1", 0), BaseHTTPRequestHandler)
+        self.addCleanup(httpd.server_close)
+        return httpd
+
+    def test_start_failure_removes_thread_and_reraises(self):
+        from unittest import mock
+        httpd = self._httpd()
+        with mock.patch.object(threading.Thread, "start", side_effect=RuntimeError("no threads")):
+            with self.assertRaises(RuntimeError):
+                httpd.process_request(None, ("127.0.0.1", 1))
+        self.assertEqual(httpd._inflight, set())
+        httpd.join_inflight(0.1)
+
+    def test_join_skips_unstarted_threads(self):
+        httpd = self._httpd()
+        httpd._inflight.add(threading.Thread(target=lambda: None))
+        httpd.join_inflight(0.1)  # must not raise RuntimeError
+
 
 if __name__ == "__main__":
     unittest.main()

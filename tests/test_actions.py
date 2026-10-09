@@ -242,6 +242,60 @@ class ActionBase(unittest.TestCase):
                             now=NOW, out=self.out)
 
 
+class UiCommandTests(ActionBase):
+    def test_second_launch_notifies_and_starts_nothing(self):
+        from unittest import mock
+        from gh_deploy_watcher.ui_server import try_lock_instance
+        from gh_deploy_watcher.config import config_dir
+        held = try_lock_instance(config_dir())
+        self.addCleanup(held.close)
+        with mock.patch("gh_deploy_watcher.ui_launcher.run_ui") as run, \
+                mock.patch("gh_deploy_watcher.ui_server.UiServer.start") as start:
+            rc = self.main(["ui"], FakeRunner())
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.notes.items, [("gh-deploy-watcher", "The selection window is already open")])
+        run.assert_not_called()
+        start.assert_not_called()
+
+    def test_runs_and_releases_lock(self):
+        from unittest import mock
+        from gh_deploy_watcher.ui_server import try_lock_instance
+        from gh_deploy_watcher.config import config_dir
+        with mock.patch("gh_deploy_watcher.ui_launcher.run_ui", return_value=0) as run:
+            self.assertEqual(self.main(["ui"], FakeRunner()), 0)
+        self.assertEqual(run.call_count, 1)
+        again = try_lock_instance(config_dir())
+        self.assertIsNotNone(again)
+        again.close()
+
+    def test_lock_released_after_exception_without_traceback(self):
+        from unittest import mock
+        from gh_deploy_watcher.ui_server import try_lock_instance
+        from gh_deploy_watcher.config import config_dir
+        with mock.patch("gh_deploy_watcher.ui_launcher.run_ui", side_effect=OSError("boom")):
+            rc = self.main(["ui"], FakeRunner())
+        self.assertEqual(rc, 1)
+        self.assertEqual(len(self.notes.items), 1)
+        again = try_lock_instance(config_dir())
+        self.assertIsNotNone(again)
+        again.close()
+
+    def test_broken_config_does_not_traceback(self):
+        from unittest import mock
+        from gh_deploy_watcher.config import config_dir
+        (config_dir() / "config.json").write_text("{bad")
+        with mock.patch("gh_deploy_watcher.ui_launcher.run_ui", return_value=0):
+            rc = self.main(["ui"], FakeRunner())
+        self.assertIn(rc, (0, 1))
+
+    def test_unexpected_server_start_error_is_notified(self):
+        from unittest import mock
+        with mock.patch("gh_deploy_watcher.ui_server.UiServer.start", side_effect=OSError("port")):
+            rc = self.main(["ui"], FakeRunner())
+        self.assertEqual(rc, 1)
+        self.assertEqual(len(self.notes.items), 1)
+
+
 class MainTests(ActionBase):
     def test_polling_off_zero_calls_and_renders(self):
         r = FakeRunner()
