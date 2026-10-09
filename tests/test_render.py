@@ -93,10 +93,21 @@ class MenuTests(unittest.TestCase):
         self.assertIn("○ Both", out)
         self.assertIn("param1=filter param2=dev", out)
 
+    def test_open_config_only_when_file_exists(self):
+        import tempfile, pathlib
+        with tempfile.TemporaryDirectory() as d:
+            p = pathlib.Path(d) / "config.json"
+            out = render_menu(config(), state(), None, NOW, SCRIPT, config_path=p)
+            self.assertNotIn("Open config", out)
+            p.write_text("{}")
+            out = render_menu(config(), state(), None, NOW, SCRIPT, config_path=p)
+            self.assertIn("Open config", out)
+            self.assertIn("bash=/usr/bin/open", out)
+
     def test_static_entries(self):
         out = render(state())
         for s in ("Stop polling", "Poll now", "param1=refresh", "Add / remove repos…",
-                  "param1=setup terminal=true", "Open config", "bash=/usr/bin/open"):
+                  "param1=setup terminal=true"):
             self.assertIn(s, out)
         st = state()
         st.polling = False
@@ -139,9 +150,19 @@ class MenuTests(unittest.TestCase):
     def test_error_entry_only_that_workflow(self):
         out = render(state(prd={"error": "repo not found"}, dev=run(2)))
         self.assertEqual(out.count("repo not found"), 1)
-        self.assertEqual(first(out), "🟢")
+        self.assertEqual(first(out), "⚠")
         self.assertIn("DEV · EU", out)
         self.assertEqual(out.count("repo not found"), 1)
+
+    def test_error_entry_with_known_failure_keeps_red(self):
+        out = render(state(prd={"error": "x"}, dev=run(2, conclusion="failure")))
+        self.assertEqual(first(out), "🟠")
+        out = render(state(prd=run(2, conclusion="failure"), dev={"error": "x"}))
+        self.assertEqual(first(out), "🔴")
+
+    def test_error_entry_never_green_or_yellow(self):
+        out = render(state(prd={"error": "x"}, dev=run(2, status="in_progress", conclusion=None)))
+        self.assertEqual(first(out), "⚠")
 
     def test_error_entry_other_repo_unaffected(self):
         cfg = Config([RepoConfig("acme/api", [Workflow("a.yaml", "prd", "A")]),
@@ -201,6 +222,29 @@ class SanitizeTests(unittest.TestCase):
     def test_sanitize(self):
         self.assertEqual(sanitize("a|b\nc\r\nd"), "a b c  d")
         self.assertEqual(sanitize("it's \"x\""), "its x")
+
+
+class ErrorMenuActionsTests(unittest.TestCase):
+    def test_actions_present_with_script(self):
+        import tempfile, pathlib
+        with tempfile.TemporaryDirectory() as d:
+            p = pathlib.Path(d) / "config.json"
+            p.write_text("{bad")
+            text = error_menu("bad | config", SCRIPT, p)
+        self.assertTrue(text.startswith("\u26a0\n---\n"))
+        for s in ("Add / remove repos", "param1=setup terminal=true", "Stop polling",
+                  "param1=stop", "Open config", "bash=/usr/bin/open"):
+            self.assertIn(s, text)
+        self.assertNotIn("bad |", text)
+
+    def test_no_open_config_when_file_missing(self):
+        text = error_menu("x", SCRIPT, "/nonexistent/dir/config.json")
+        self.assertNotIn("Open config", text)
+        self.assertIn("Add / remove repos", text)
+
+    def test_quote_in_script_path_degrades_to_plain_menu(self):
+        text = error_menu("x", "/tmp/it's/x.py", None)
+        self.assertEqual(text.splitlines(), ["\u26a0", "---", "x"])
 
 
 class ErrorMenuTests(unittest.TestCase):

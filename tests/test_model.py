@@ -67,6 +67,17 @@ class OverallStateTests(unittest.TestCase):
     def test_error_beats_failed(self):
         self.assertEqual(overall_state([("prd", "failed")], True, "boom"), "error")
 
+    def test_workflow_error_never_green_or_yellow(self):
+        self.assertEqual(overall_state([("prd", "error"), ("dev", "success")], True, None), "error")
+        self.assertEqual(overall_state([("prd", "error"), ("dev", "running")], True, None), "error")
+
+    def test_known_failure_beats_workflow_error(self):
+        self.assertEqual(overall_state([("prd", "error"), ("dev", "failed")], True, None), "dev_failed")
+        self.assertEqual(overall_state([("prd", "failed"), ("dev", "error")], True, None), "prd_failed")
+
+    def test_global_error_and_paused_beat_workflow_error(self):
+        self.assertEqual(overall_state([("prd", "error")], False, None), "paused")
+
     def test_prd_beats_dev(self):
         items = [("dev", "failed"), ("prd", "failed")]
         self.assertEqual(overall_state(items, True, None), "prd_failed")
@@ -92,10 +103,24 @@ class NewFailuresTests(unittest.TestCase):
         }
 
     def test_dedup(self):
-        self.assertEqual(new_failures(self.cur, {1}, False), ["a/b/z.yml"])
+        self.assertEqual(new_failures(self.cur, {"1:1"}, False), ["a/b/z.yml"])
 
     def test_all(self):
         self.assertEqual(sorted(new_failures(self.cur, set(), False)), ["a/b/x.yml", "a/b/z.yml"])
+
+    def test_attempt_is_part_of_the_key(self):
+        cur = {"a/b/x.yml": Run(1, "completed", "failure", "c", "t", "u", "main", 2)}
+        self.assertEqual(new_failures(cur, {"1:1"}, False), ["a/b/x.yml"])
+        self.assertEqual(new_failures(cur, {"1:2"}, False), [])
+
+    def test_run_attempt_roundtrip_and_legacy(self):
+        r = Run(1, "completed", "failure", "c", "t", "u", "main", 3)
+        self.assertEqual(Run.from_dict(r.to_dict()).attempt, 3)
+        d = r.to_dict()
+        del d["attempt"]
+        self.assertEqual(Run.from_dict(d).attempt, 1)
+        d["attempt"] = "x"
+        self.assertEqual(Run.from_dict(d).attempt, 1)
 
     def test_baseline(self):
         self.assertEqual(new_failures(self.cur, set(), True), [])

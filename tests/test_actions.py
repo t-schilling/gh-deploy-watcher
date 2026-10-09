@@ -27,11 +27,11 @@ def cfg():
     ])
 
 
-def run_json(id, conclusion="success", status="completed"):
+def run_json(id, conclusion="success", status="completed", attempt=1):
     return json.dumps([{
         "databaseId": id, "status": status, "conclusion": conclusion,
         "createdAt": "2026-10-09T11:48:00Z", "displayTitle": "Merge pull request #7 from acme/x",
-        "url": "https://example.com/run/%d" % id, "headBranch": "main",
+        "url": "https://example.com/run/%d" % id, "headBranch": "main", "attempt": attempt,
     }])
 
 
@@ -129,11 +129,54 @@ class PollTests(unittest.TestCase):
         _, _, err = actions.poll(Config([]), State(), FakeRunner(), NOW)
         self.assertIsNone(err)
 
-    def test_other_error_stored(self):
+    def test_other_error_keeps_cache(self):
+        good = {"id": 9, "status": "completed", "conclusion": "failure", "created_at": "x",
+                "title": "t", "url": "u", "branch": "b"}
         r = FakeRunner(default=GhError("other", "weird"))
-        st, _, err = actions.poll(cfg(), State(), r, NOW)
-        self.assertEqual(st.last[PRD], {"error": "weird"})
+        st, _, err = actions.poll(cfg(), State(last={PRD: dict(good)}), r, NOW)
+        self.assertEqual(st.last[PRD], good)
+        self.assertNotIn(DEV, st.last)
         self.assertIsNone(err)
+
+    def test_only_not_found_overwrites_cache(self):
+        good = {"id": 9, "status": "completed", "conclusion": "failure", "created_at": "x",
+                "title": "t", "url": "u", "branch": "b"}
+        for kind in ("auth", "missing", "network", "rate_limit", "other"):
+            r = FakeRunner(default=GhError(kind, "m"))
+            st, _, _ = actions.poll(cfg(), State(last={PRD: dict(good)}), r, NOW)
+            self.assertEqual(st.last[PRD], good, kind)
+        r = FakeRunner(default=GhError("not_found", "gone"))
+        st, _, _ = actions.poll(cfg(), State(last={PRD: dict(good)}), r, NOW)
+        self.assertEqual(st.last[PRD], {"error": "gone"})
+
+    def test_deadline_stops_calls_and_keeps_cache(self):
+        good = {"id": 9, "status": "completed", "conclusion": "success", "created_at": "x",
+                "title": "t", "url": "u", "branch": "b"}
+        clock = [0.0]
+        def mono():
+            return clock[0]
+        def slow():
+            clock[0] += 30.0
+            return run_json(1)
+        r = FakeRunner(default=slow)
+        st, keys, err = actions.poll(
+            cfg(), State(last={"acme/web/deploy-dev.yaml": dict(good)}), r, NOW,
+            max_seconds=45.0, monotonic=mono)
+        self.assertEqual(len(r.calls), 2)  # 0s, 30s ok; 60s > 45s: stop
+        self.assertEqual(st.last["acme/web/deploy-dev.yaml"], good)
+        self.assertNotIn("acme/web/deploy-prd.yaml", st.last)
+        self.assertIsNone(err)
+
+    def test_deadline_skipped_not_counted_as_errors(self):
+        clock = [0.0]
+        def boom():
+            clock[0] += 50.0
+            return GhError("network", "down")
+        r = FakeRunner(default=boom)
+        _, _, err = actions.poll(cfg(), State(), r, NOW, max_seconds=45.0,
+                                 monotonic=lambda: clock[0])
+        self.assertEqual(len(r.calls), 1)
+        self.assertEqual(err, "down")  # the one attempted call failed globally
 
     def test_corrupt_cached_entry_does_not_crash(self):
         s = State(last={PRD: {"id": "nope"}})
@@ -150,7 +193,7 @@ class PollTests(unittest.TestCase):
         r = FakeRunner(ids_from=3)
         st, keys, _ = actions.poll(cfg(), State(), r, NOW)
         self.assertEqual(len(keys), 4)
-        st.notified = [3, 4, 5, 6]  # poll() no longer records ids; _commit does
+        st.notified = ["3:1", "4:1", "5:1", "6:1"]  # poll() no longer records ids; _commit does
         _, keys2, _ = actions.poll(cfg(), st, r, NOW)
         self.assertEqual(keys2, [])
 
@@ -166,14 +209,14 @@ class PollTests(unittest.TestCase):
         r = FakeRunner(default=run_json(3, "failure"))
         st, keys, _ = actions.poll(cfg(), State(), r, NOW, baseline=True)
         self.assertEqual(keys, [])
-        self.assertIn(3, st.notified)
+        self.assertIn("3:1", st.notified)
 
     def test_notified_capped(self):
-        s = State(notified=list(range(1000, 1300)))
+        s = State(notified=["%d:1" % i for i in range(1000, 1300)])
         st, _, _ = actions.poll(cfg(), s, FakeRunner(default=run_json(5, "failure")), NOW,
                                 baseline=True)
         self.assertEqual(len(st.notified), 200)
-        self.assertEqual(st.notified[-1], 5)
+        self.assertEqual(st.notified[-1], "5:1")
 
 
 class ActionBase(unittest.TestCase):
@@ -216,7 +259,7 @@ class MainTests(ActionBase):
         self.assertEqual(self.notes.items[0][1], "acme/api · #7")
         self.main([], r)
         self.assertEqual(len(self.notes.items), n)
-        self.assertIn(3, load_state().notified)
+        self.assertIn("3:1", load_state().notified)
 
     def test_notify_raising_does_not_break(self):
         save_state(State(polling=True))
@@ -288,6 +331,72 @@ class MainTests(ActionBase):
             self.assertEqual(self.main(["bogus"], FakeRunner()), 2)
 
 
+class RerunAttemptTests(ActionBase):
+    def test_second_attempt_failure_notifies_once_more(self):
+        save_state(State(polling=True, filter="prd"))
+        one = Config([RepoConfig("acme/api", [Workflow("deploy-prd.yaml", "prd", "PRD")])])
+        save_config(one)
+        def go(res):
+            self.main([], FakeRunner(default=res))
+        go(run_json(222, "failure", attempt=1))
+        self.assertEqual(len(self.notes.items), 1)
+        go(run_json(222, "failure", attempt=1))
+        self.assertEqual(len(self.notes.items), 1)  # same attempt never twice
+        go(run_json(222, None, status="in_progress", attempt=2))
+        self.assertEqual(len(self.notes.items), 1)
+        go(run_json(222, "failure", attempt=2))
+        self.assertEqual(len(self.notes.items), 2)
+        go(run_json(222, "failure", attempt=2))
+        self.assertEqual(len(self.notes.items), 2)
+        self.assertEqual(load_state().notified, ["222:1", "222:2"])
+
+    def test_legacy_int_state_counts_as_attempt_one(self):
+        Path(self._tmp.name, "state.json").write_text(
+            json.dumps({"polling": True, "notified": [3, 4, 5, 6]}))
+        self.main([], FakeRunner(ids_from=3))
+        self.assertEqual(self.notes.items, [])
+
+
+class FinalFixMainTests(ActionBase):
+    def test_stop_and_filter_with_corrupt_config(self):
+        Path(self._tmp.name, "config.json").write_text("{bad")
+        save_state(State(polling=True))
+        r = FakeRunner()
+        self.assertEqual(self.main(["stop"], r), 0)
+        self.assertFalse(load_state().polling)
+        self.assertEqual(self.main(["filter", "prd"], r), 0)
+        self.assertEqual(load_state().filter, "prd")
+        self.assertNotIn("Traceback", self.out.getvalue())
+        self.assertTrue(self.out.getvalue().startswith("\u26a0"))
+        self.assertEqual(r.calls, [])
+
+    def test_error_menu_from_main_has_actions(self):
+        Path(self._tmp.name, "config.json").write_text("{bad")
+        self.main([], FakeRunner())
+        text = self.out.getvalue()
+        for s in ("Add / remove repos", "Stop polling", "Open config"):
+            self.assertIn(s, text)
+        self.assertIn("bash='/tmp/plugin.py'", text)
+
+    def test_missing_config_file_menu_has_no_open_config(self):
+        os.unlink(os.path.join(self._tmp.name, "config.json"))
+        self.main([], FakeRunner())
+        self.assertNotIn("Open config", self.out.getvalue())
+
+    def test_start_sets_polling_only_after_baseline_commit(self):
+        seen = []
+        def mid():
+            seen.append(load_state().polling)
+            # a timer tick during start must not poll or notify
+            self.main([], FakeRunner(ids_from=3), notify=self.notes)
+            return run_json(3, "failure")
+        self.assertEqual(self.main(["start"], FakeRunner(default=mid)), 0)
+        self.assertEqual(seen[0], False)
+        self.assertEqual(self.notes.items, [])
+        self.assertTrue(load_state().polling)
+        self.assertIn("3:1", load_state().notified)
+
+
 class ConcurrencyTests(ActionBase):
     def test_lost_pause_and_filter(self):
         save_state(State(polling=True))
@@ -319,11 +428,11 @@ class ConcurrencyTests(ActionBase):
         save_state(State(polling=True, filter="prd"))
         def mid_poll():
             st = load_state()
-            st.notified = [77]
+            st.notified = ["77:1"]
             save_state(st)
             return run_json(1)
         self.main([], FakeRunner(default=mid_poll))
-        self.assertIn(77, load_state().notified)
+        self.assertIn("77:1", load_state().notified)
 
     def test_save_failure_menu_no_notify(self):
         save_state(State(polling=True))
