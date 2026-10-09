@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>gh-deploy-watcher - What to track</title>
+<link rel="stylesheet" href="app.css">
+<script src="app.js" defer></script>
+</head>
+<body>
+<div class="bg" aria-hidden="true"><i></i><i></i><i></i></div>
+
+<div class="wrap">
+  <header class="glass">
+    <div class="logo" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-7 4 14 3-7h4"/></svg>
+    </div>
+    <div class="title"><h1>What to track</h1><p>Pick the deploy workflows gh-deploy-watcher should follow</p></div>
+    <div class="stats">
+      <div class="stat"><b id="st-repos">0</b><span>repos</span></div>
+      <div class="stat"><b id="st-wf">0</b><span>workflows</span></div>
+      <div class="stat who"><span class="pill"><span class="dot" aria-hidden="true"></span><span id="login">...</span></span></div>
+    </div>
+  </header>
+
+  <div id="notice" class="notice-slot"></div>
+
+  <main>
+    <section class="glass panel" aria-labelledby="repos-h">
+      <h2 id="repos-h">Repos <span id="count"></span></h2>
+      <div class="search">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="9" cy="9" r="6"/><path d="M14 14l4 4"/></svg>
+        <input id="q" type="search" placeholder="Search repos" autocomplete="off" aria-label="Search repos">
+      </div>
+      <div class="repos" id="repos"></div>
+    </section>
+
+    <section class="glass panel" id="detail" aria-live="polite"></section>
+  </main>
+</div>
+
+<footer class="glass">
+  <div class="summary" id="summary" role="status" aria-live="polite"></div>
+  <div class="btns">
+    <button type="button" class="btn" id="cancel">Cancel</button>
+    <button type="button" class="btn primary" id="save" disabled>Save</button>
+    <button type="button" class="btn primary" id="done" hidden>Done</button>
+  </div>
+</footer>
+</body>
+</html>
