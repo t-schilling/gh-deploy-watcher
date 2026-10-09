@@ -58,7 +58,7 @@ def _error(status: int, kind: str, message: str, allow: Optional[str] = None) ->
 
 
 class _Httpd(ThreadingHTTPServer):
-    daemon_threads = False  # server_close() waits for in-flight responses
+    daemon_threads = True
 
     def handle_error(self, request: Any, client_address: Any) -> None:
         pass
@@ -111,9 +111,13 @@ class _RequestHandler(BaseHTTPRequestHandler):
 
     def _handle(self) -> None:
         try:
-            self._send(self._dispatch())
+            resp = self._dispatch()
+        except Exception:
+            resp = _error(500, "internal", "internal error")
+        try:
+            self._send(resp)
         except OSError:
-            pass
+            return  # client went away while writing
         except Exception:
             try:
                 self._send(_error(500, "internal", "internal error"))
@@ -145,6 +149,8 @@ class _RequestHandler(BaseHTTPRequestHandler):
             if method != "GET":
                 return _error(405, "method_not_allowed", "method not allowed", "GET")
             return self._static(path)
+        else:
+            return _error(404, "not_found", "not found")
         return self._route(method, path, headers)
 
     def _static(self, path: str) -> Response:
@@ -240,7 +246,7 @@ class UiServer:
             self.check_idle()
         stopper = self._stop_thread
         if stopper is not None and stopper is not threading.current_thread():
-            stopper.join(15)
+            stopper.join(3)
 
     def shutdown(self) -> None:
         with self._lock:
