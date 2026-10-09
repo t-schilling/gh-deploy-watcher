@@ -130,3 +130,29 @@ class ValidRepoNameTests(unittest.TestCase):
         for name in ("acme", "", "/api", "acme/", "-x/api", "acme/-y", "./api",
                      "acme/..", "../api", "acme/api\n", "acme/a b", "a/b/c", "acme/\u202eapi"):
             self.assertFalse(valid_repo_name(name), repr(name))
+
+
+class SaveConfigTempFileTests(unittest.TestCase):
+    def test_unique_temp_files_and_no_strays(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "config.json"
+            sources = []
+            real = os.replace
+
+            def spy(src, dst):
+                sources.append(str(src))
+                real(src, dst)
+
+            with mock.patch("gh_deploy_watcher.config.os.replace", spy):
+                save_config(Config([]), p)
+                save_config(Config([]), p)
+            self.assertEqual(len(set(sources)), 2)
+            self.assertEqual(os.listdir(d), ["config.json"])
+
+    def test_temp_removed_on_failure(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "config.json"
+            with mock.patch("gh_deploy_watcher.config.os.replace", side_effect=OSError("x")):
+                with self.assertRaises(OSError):
+                    save_config(Config([]), p)
+            self.assertEqual(os.listdir(d), [])

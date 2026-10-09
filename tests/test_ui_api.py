@@ -265,6 +265,46 @@ class PutTests(ApiCase):
         self.assertEqual((status, body["error"]["kind"]), (500, "io"))
 
 
+class ConcurrencyTests(ApiCase):
+    def test_concurrent_puts_exactly_one_wins(self):
+        import threading
+        for trial in range(20):
+            base = config_hash()
+            barrier = threading.Barrier(6)
+            results = []
+
+            def worker(i):
+                repos = [{"repo": "acme/r%d" % i, "workflows": [wf()]}]
+                barrier.wait()
+                results.append(self.put(repos, base_hash=base)[0])
+
+            threads = [threading.Thread(target=worker, args=(i,)) for i in range(6)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(10)
+            self.assertEqual(sorted(results), [200] + [409] * 5, "trial %d" % trial)
+            json.loads(self.path.read_text())
+
+
+class InputHardeningTests(ApiCase):
+    def test_non_utf8_config_is_422_config(self):
+        self.path.write_bytes(b"\xff\xfe{")
+        for path in ("/api/session", "/api/repos/acme/api/workflows"):
+            status, body = self.call("GET", path)
+            self.assertEqual((status, body["error"]["kind"]), (422, "config"), path)
+
+    def test_bad_workflow_file_names(self):
+        for name in (".", "..", "--help", "-a.yml", ".hidden.yml", "x.txt", "deploy", "a.yml.txt"):
+            status, body = self.put([{"repo": "acme/api", "workflows": [wf(file=name)]}])
+            self.assertEqual((status, body["error"]["kind"]), (422, "validation"), name)
+        self.assertFalse(self.path.exists())
+
+    def test_good_workflow_file_names(self):
+        status, _ = self.put([{"repo": "acme/api", "workflows": [wf("a.yml"), wf("b.yaml")]}])
+        self.assertEqual(status, 200)
+
+
 class GhErrorTests(ApiCase):
     def test_kinds_map_to_502(self):
         for kind in ("auth", "not_found", "network"):
