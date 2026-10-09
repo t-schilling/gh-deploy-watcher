@@ -60,6 +60,34 @@ def _error(status: int, kind: str, message: str, allow: Optional[str] = None) ->
 class _Httpd(ThreadingHTTPServer):
     daemon_threads = True
 
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        self._inflight: set = set()
+        self._inflight_lock = threading.Lock()
+        super().__init__(*args, **kwargs)
+
+    def process_request(self, request: Any, client_address: Any) -> None:
+        thread = threading.Thread(target=self._run_request,
+                                  args=(request, client_address), daemon=True)
+        with self._inflight_lock:
+            self._inflight.add(thread)
+        thread.start()
+
+    def _run_request(self, request: Any, client_address: Any) -> None:
+        try:
+            self.process_request_thread(request, client_address)
+        finally:
+            with self._inflight_lock:
+                self._inflight.discard(threading.current_thread())
+
+    def join_inflight(self, seconds: float) -> None:
+        """Wait for in-flight replies against one shared deadline."""
+        deadline = time.monotonic() + seconds
+        with self._inflight_lock:
+            threads = list(self._inflight)
+        for thread in threads:
+            if thread is not threading.current_thread():
+                thread.join(max(0.0, deadline - time.monotonic()))
+
     def handle_error(self, request: Any, client_address: Any) -> None:
         pass
 
@@ -246,7 +274,7 @@ class UiServer:
             self.check_idle()
         stopper = self._stop_thread
         if stopper is not None and stopper is not threading.current_thread():
-            stopper.join(3)
+            stopper.join(5)
 
     def shutdown(self) -> None:
         with self._lock:
@@ -264,6 +292,7 @@ class UiServer:
     def _stop_httpd(httpd: _Httpd) -> None:
         httpd.shutdown()
         httpd.server_close()
+        httpd.join_inflight(3.0)
 
 
 def try_lock_instance(directory: Path) -> Optional[IO[str]]:
