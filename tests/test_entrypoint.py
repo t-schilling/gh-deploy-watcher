@@ -57,6 +57,35 @@ class EntrypointTests(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("definitely_not_a_module_xyz", r.stderr)
 
+    def test_offline_keeps_red_and_cached_run(self):
+        import json
+        (self.home / "config.json").write_text(json.dumps({"repos": [{"repo": "acme/api", "workflows": [
+            {"file": "deploy.yaml", "env": "prd", "label": "PRD"}]}]}))
+        (self.home / "state.json").write_text(json.dumps({
+            "polling": True, "filter": "both", "notified": ["5:1"],
+            "last": {"acme/api/deploy.yaml": {
+                "id": 5, "status": "completed", "conclusion": "failure",
+                "created_at": "2026-10-09T11:00:00Z", "title": "Merge pull request #7 from acme/x",
+                "url": "https://example.com/r/5", "branch": "main", "attempt": 1}}}))
+        stubs = Path(self._tmp.name) / "stubs"
+        stubs.mkdir()
+        gh = stubs / "gh"
+        gh.write_text("#!/bin/sh\necho 'error connecting to api.github.com' >&2\n"
+                      "echo 'check your internet connection or https://githubstatus.com' >&2\n"
+                      "exit 1\n")
+        gh.chmod(0o755)
+        d = self.plugin_dir()
+        env = dict(os.environ, GH_DEPLOY_WATCHER_HOME=str(self.home),
+                   PATH=str(stubs) + os.pathsep + "/usr/bin:/bin")
+        r = subprocess.run([sys.executable, str(d / "gh-deploy-watcher.1m.py")], env=env,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(r.stdout.startswith("\u26a0"), r.stdout)  # offline: global warning
+        self.assertIn("failed", r.stdout)  # cached red run still listed
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertIn("5", json.loads((self.home / "state.json").read_text())["last"]
+                      ["acme/api/deploy.yaml"]["id"].__str__())
+
     def test_apostrophe_in_path_gives_warning_menu(self):
         r = self.run_plugin(self.plugin_dir("it's here"))
         self.assertEqual(r.returncode, 0, r.stderr)

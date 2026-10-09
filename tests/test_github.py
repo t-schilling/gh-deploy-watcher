@@ -42,9 +42,20 @@ class LatestRunTests(unittest.TestCase):
         self.assertEqual(r.calls, [[
             "run", "list", "--repo", "acme/api", "--workflow", "deploy.yml",
             "--limit", "1", "--json",
-            "databaseId,status,conclusion,createdAt,displayTitle,url,headBranch",
+            "databaseId,status,conclusion,createdAt,displayTitle,url,headBranch,attempt",
         ]])
         self.assertNotIn("--branch", r.calls[0])
+
+    def test_attempt_parsed_default_and_tolerant(self):
+        import json as _j
+        base = _j.loads(fixture("run_list_failure.json"))
+        base[0]["attempt"] = 2
+        self.assertEqual(github.latest_run("a/b", "d.yml", FakeRunner(_j.dumps(base))).attempt, 2)
+        for bad in (None, "x", 0, -1, True):
+            base[0]["attempt"] = bad
+            self.assertEqual(github.latest_run("a/b", "d.yml", FakeRunner(_j.dumps(base))).attempt, 1)
+        del base[0]["attempt"]
+        self.assertEqual(github.latest_run("a/b", "d.yml", FakeRunner(_j.dumps(base))).attempt, 1)
 
     def test_failure(self):
         run = github.latest_run("acme/api", "d.yml", FakeRunner(fixture("run_list_failure.json")))
@@ -131,9 +142,18 @@ class ClassifyTests(unittest.TestCase):
         self.assertEqual(c(1, "network is unreachable"), "network")
         self.assertEqual(c(1, "boom"), "other")
 
+    def test_offline_messages_are_network(self):
+        c = github.classify_error
+        for msg in ("error connecting to api.github.com",
+                    "check your internet connection or https://githubstatus.com",
+                    "dial tcp: lookup api.github.com: no such host",
+                    "dial tcp 1.2.3.4:443: connect: Connection refused",
+                    "net/http: TLS handshake timeout"):
+            self.assertEqual(c(1, msg), "network", msg)
+
 
 class RunGhTests(unittest.TestCase):
-    def test_path_prepended(self):
+    def test_path_appended_after_inherited(self):
         cp = subprocess.CompletedProcess(["gh"], 0, stdout="ok", stderr="")
         with mock.patch.dict(os.environ, {"PATH": "/usr/bin:/bin"}):
             with mock.patch("subprocess.run", return_value=cp) as run:
@@ -141,8 +161,7 @@ class RunGhTests(unittest.TestCase):
         args, kwargs = run.call_args
         self.assertEqual(args[0], ["gh", "auth", "status"])
         parts = kwargs["env"]["PATH"].split(os.pathsep)
-        self.assertEqual(parts[:2], ["/opt/homebrew/bin", "/usr/local/bin"])
-        self.assertIn("/usr/bin", parts)
+        self.assertEqual(parts, ["/usr/bin", "/bin", "/opt/homebrew/bin", "/usr/local/bin"])
         self.assertEqual(kwargs["timeout"], 30)
         self.assertEqual(kwargs["encoding"], "utf-8")
 

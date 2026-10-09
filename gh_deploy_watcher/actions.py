@@ -19,6 +19,7 @@ from gh_deploy_watcher.state import VALID_FILTERS, State, load_state, save_state
 
 _GLOBAL_KINDS = ("auth", "missing", "network", "rate_limit")
 _NOTIFIED_CAP = 200
+_MAX_POLL_SECONDS = 45.0
 _REPO_RE = re.compile(r"(?!\.{1,2}/)[A-Za-z0-9_.][A-Za-z0-9_.-]*/(?!\.{1,2}$)[A-Za-z0-9_.][A-Za-z0-9_.-]*")
 
 NotifyFn = Callable[[str, str], None]
@@ -33,7 +34,9 @@ def _cached_run(entry: object) -> Optional[Run]:
 
 
 def poll(config: Config, state: State, runner: Runner, now: float,
-         baseline: bool = False) -> Tuple[State, List[str], Optional[str]]:
+         baseline: bool = False, max_seconds: float = _MAX_POLL_SECONDS,
+         monotonic: Callable[[], float] = time.monotonic) -> Tuple[State, List[str], Optional[str]]:
+    started = monotonic()
     fresh: Dict[str, Run] = {}
     attempted = 0
     global_errors: List[str] = []
@@ -41,16 +44,18 @@ def poll(config: Config, state: State, runner: Runner, now: float,
         for wf in repo.workflows:
             if not env_visible(wf.env, state.filter):
                 continue
+            if monotonic() - started > max_seconds:
+                continue  # out of time: keep the cached entry, not an error
             key = workflow_key(repo.repo, wf.file)
             attempted += 1
             try:
                 run = latest_run(repo.repo, wf.file, runner)
             except GhError as exc:
                 if exc.kind in _GLOBAL_KINDS:
-                    global_errors.append(exc.message or str(exc))  # keep last good entry
-                else:
+                    global_errors.append(exc.message or str(exc))
+                if exc.kind == "not_found":
                     state.last[key] = {"error": exc.message or str(exc)}
-                continue
+                continue  # any other failure keeps the last good entry
             if run is None:
                 state.last[key] = {"run": None}
             else:
@@ -59,7 +64,7 @@ def poll(config: Config, state: State, runner: Runner, now: float,
     error = global_errors[0] if attempted and len(global_errors) == attempted else None
     state.last_poll = now
     if baseline:
-        failed = [r.id for r in fresh.values() if classify(r) == "failed"]
+        failed = [r.notify_key for r in fresh.values() if classify(r) == "failed"]
         state.notified.extend(i for i in failed if i not in state.notified)
         keys: List[str] = []
     else:
@@ -108,9 +113,9 @@ def _refresh(config: Config, runner: Runner, notify_fn: NotifyFn, now: float,
         disk.notified.extend(i for i in state.notified if i not in disk.notified)
         for key in keys:
             run = _cached_run(state.last.get(key))
-            if run is None or run.id in disk.notified:
+            if run is None or run.notify_key in disk.notified:
                 continue
-            disk.notified.append(run.id)
+            disk.notified.append(run.notify_key)
             repo, label = labels.get(key, ("", key))
             to_notify.append(("Deploy failed: %s" % label,
                               "%s \u00b7 %s" % (repo, run_ref(run.title))))
@@ -168,7 +173,7 @@ def main(argv: List[str], script_path: Optional[str] = None, runner: Runner = ru
     try:
         return _dispatch(list(argv), script, runner, notify_fn, confirm_fn, ts, out)
     except (ConfigError, ValueError, OSError) as exc:
-        out.write(error_menu(str(exc)))
+        out.write(error_menu(str(exc), script, config_dir() / "config.json"))
         return 0
 
 
@@ -201,15 +206,16 @@ def _dispatch(argv: List[str], script: str, runner: Runner, notify_fn: NotifyFn,
         return _fail("invalid filter %r: expected one of %s" % (args[:1], ", ".join(VALID_FILTERS)))
     if cmd not in ("start", "stop", "filter", "refresh"):
         return _fail("unknown command %r" % cmd)
-    config = load_config()
     if cmd == "stop":
         _update(polling=False)
     elif cmd == "start":
-        _update(polling=True)
-        _refresh(config, runner, notify_fn, ts, baseline=True)
+        try:
+            _refresh(load_config(), runner, notify_fn, ts, baseline=True)
+        finally:
+            _update(polling=True)  # after the baseline commit, even if config is broken
     elif cmd == "filter":
         _update(filter=args[0])
-        _refresh(config, runner, notify_fn, ts)
+        _refresh(load_config(), runner, notify_fn, ts)
     else:
-        _refresh(config, runner, notify_fn, ts)
+        _refresh(load_config(), runner, notify_fn, ts)
     return 0

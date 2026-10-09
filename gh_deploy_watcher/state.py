@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -11,6 +12,7 @@ from typing import Any, Dict, List, Optional
 from gh_deploy_watcher.config import config_dir
 
 VALID_FILTERS = ("both", "prd", "dev")
+_KEY_RE = re.compile(r"[0-9]+:[0-9]+")
 
 
 @dataclass
@@ -19,7 +21,7 @@ class State:
     filter: str = "both"
     last: Dict[str, dict] = field(default_factory=dict)
     last_poll: Optional[float] = None
-    notified: List[int] = field(default_factory=list)
+    notified: List[str] = field(default_factory=list)
 
 
 def _default_path() -> Path:
@@ -28,6 +30,15 @@ def _default_path() -> Path:
 
 def _is_int(v: Any) -> bool:
     return isinstance(v, int) and not isinstance(v, bool)
+
+
+def _notify_key(n: Any) -> Optional[str]:
+    """Normalise a stored dedupe key; a legacy int id means attempt 1."""
+    if _is_int(n):
+        return "%d:1" % n
+    if isinstance(n, str) and _KEY_RE.fullmatch(n):
+        return n
+    return None
 
 
 def _parse(data: Any) -> State:
@@ -46,7 +57,7 @@ def _parse(data: Any) -> State:
         state.last_poll = lp
     notified = data.get("notified")
     if isinstance(notified, list):
-        state.notified = [n for n in notified if _is_int(n)]
+        state.notified = [k for k in (_notify_key(n) for n in notified) if k]
     return state
 
 

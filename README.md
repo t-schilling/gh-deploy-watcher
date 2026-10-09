@@ -103,7 +103,7 @@ This removes only the symlink in the SwiftBar plugin folder. It never touches `~
 
 ## Troubleshooting
 
-- **SwiftBar can't find `gh`.** SwiftBar runs plugins with a minimal PATH. The plugin extends PATH itself with `/opt/homebrew/bin` and `/usr/local/bin`, so a Homebrew `gh` is found. If `gh` lives elsewhere, make sure it is in one of those folders.
+- **SwiftBar can't find `gh`.** SwiftBar runs plugins with a minimal PATH. The plugin appends `/opt/homebrew/bin` and `/usr/local/bin` to PATH itself (after your own PATH, so your own `gh` wins), so a Homebrew `gh` is found. If `gh` lives elsewhere, make sure it is in one of those folders.
 - **No notifications.** Notifications are sent with `osascript`. Allow notifications in System Settings, Notifications, for the app that runs it (SwiftBar, or Script Editor).
 - **Authentication errors in the menu.** Run `gh auth status` in a terminal; if it fails, run `gh auth login`.
 - **Reset state.** Stop polling, delete `~/.config/gh-deploy-watcher/state.json`, and start again. Your `config.json` is not affected.

@@ -37,20 +37,20 @@ class StateTests(unittest.TestCase):
             "filter": 5,
             "last": {"a": {"id": 1}, "b": "str", "c": [1]},
             "last_poll": "now",
-            "notified": [1, "x", 2, None, 3.5],
+            "notified": [1, "x", 2, None, 3.5, "7:2", "7:x", True, "9:1:1"],
         }))
         s = load_state(self.path)
         self.assertIs(s.polling, False)
         self.assertEqual(s.filter, "both")
         self.assertEqual(s.last, {"a": {"id": 1}})
         self.assertIsNone(s.last_poll)
-        self.assertEqual(s.notified, [1, 2])
+        self.assertEqual(s.notified, ["1:1", "2:1", "7:2"])
         self.path.write_text(json.dumps({"last": [], "notified": {}}))
         s = load_state(self.path)
         self.assertEqual((s.last, s.notified), ({}, []))
 
     def test_roundtrip(self):
-        s = State(True, "prd", {"acme/api/deploy.yaml": {"id": 7}, "x": {"error": "boom"}}, 12.5, [1, 2])
+        s = State(True, "prd", {"acme/api/deploy.yaml": {"id": 7}, "x": {"error": "boom"}}, 12.5, ["1:1", "2:1"])
         save_state(s, self.path)
         self.assertEqual(load_state(self.path), s)
 
