@@ -283,11 +283,6 @@ class MainTests(ActionBase):
         self.assertEqual(len(r.calls), 4)
         self.assertFalse(load_state().polling)
 
-    def test_setup_stub(self):
-        err = io.StringIO()
-        with redirect_stderr(err):
-            self.assertEqual(self.main(["setup"], FakeRunner()), 1)
-
     def test_unknown_subcommand(self):
         with redirect_stderr(io.StringIO()):
             self.assertEqual(self.main(["bogus"], FakeRunner()), 2)
@@ -399,13 +394,20 @@ class RerunTests(ActionBase):
         self.assertEqual(r.calls, [])
         self.assertEqual(self.out.getvalue(), "gh run rerun 123 --failed --repo acme/api\n")
 
+    def test_dotted_repo_name_accepted(self):
+        r = FakeRunner()
+        rc = self.main(["rerun", "acme/.github", "1", "dev", "--dry-run"], r)
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.out.getvalue(), "gh run rerun 1 --failed --repo acme/.github\n")
+
     def test_bad_args_exit_2(self):
         for argv in (["rerun", "nope", "1", "prd"], ["rerun", "acme/api", "x", "prd"],
                      ["rerun", "acme/api", "1", "qa"], ["rerun", "acme/api"],
                      ["rerun", "acme/api\n", "1", "prd"], ["rerun", "acme/api", "-5", "dev"],
                      ["rerun", "acme/api", " 12 ", "dev"], ["rerun", "acme/api", "1_0", "dev"],
                      ["rerun", "acme/api", "0", "dev"], ["rerun", "-x/api", "1", "dev"],
-                     ["rerun", "acme/..", "1", "dev"]):
+                     ["rerun", "acme/..", "1", "dev"], ["rerun", "./api", "1", "dev"],
+                     ["rerun", "../api", "1", "dev"], ["rerun", "acme/.", "1", "dev"]):
             r = FakeRunner()
             with redirect_stderr(io.StringIO()):
                 self.assertEqual(self.main(argv, r), 2, argv)
@@ -416,6 +418,33 @@ class RerunTests(ActionBase):
         self.assertEqual(self.main(["rerun", "acme/api", "123", "dev"], r), 1)
         self.assertEqual(self.notes.items, [("Re-run failed", "run cannot be rerun")])
         self.assertEqual(r.list_calls(), [])
+
+
+class SetupCommandTests(ActionBase):
+    def test_setup_runs_wizard_and_returns_0(self):
+        from unittest import mock
+        with mock.patch("gh_deploy_watcher.setup_wizard.run_wizard") as wiz:
+            rc = self.main(["setup"], FakeRunner())
+        self.assertEqual(rc, 0)
+        self.assertEqual(wiz.call_count, 1)
+        self.assertEqual(wiz.call_args[0][0].repos[0].repo, cfg().repos[0].repo)
+
+    def test_setup_missing_config_starts_empty(self):
+        from unittest import mock
+        os.remove(os.path.join(self._tmp.name, "config.json"))
+        with mock.patch("gh_deploy_watcher.setup_wizard.run_wizard") as wiz:
+            self.assertEqual(self.main(["setup"], FakeRunner()), 0)
+        self.assertEqual(wiz.call_args[0][0].repos, [])
+
+    def test_setup_corrupt_config_returns_1(self):
+        from unittest import mock
+        Path(self._tmp.name, "config.json").write_text("{nope")
+        err = io.StringIO()
+        with mock.patch("gh_deploy_watcher.setup_wizard.run_wizard") as wiz, redirect_stderr(err):
+            rc = self.main(["setup"], FakeRunner())
+        self.assertEqual(rc, 1)
+        self.assertIn("not valid JSON", err.getvalue())
+        wiz.assert_not_called()
 
 
 if __name__ == "__main__":
