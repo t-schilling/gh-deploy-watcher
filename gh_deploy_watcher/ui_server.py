@@ -70,7 +70,12 @@ class _Httpd(ThreadingHTTPServer):
                                   args=(request, client_address), daemon=True)
         with self._inflight_lock:
             self._inflight.add(thread)
-        thread.start()
+        try:
+            thread.start()
+        except BaseException:
+            with self._inflight_lock:
+                self._inflight.discard(thread)
+            raise
 
     def _run_request(self, request: Any, client_address: Any) -> None:
         try:
@@ -85,7 +90,7 @@ class _Httpd(ThreadingHTTPServer):
         with self._inflight_lock:
             threads = list(self._inflight)
         for thread in threads:
-            if thread is not threading.current_thread():
+            if thread is not threading.current_thread() and thread.ident is not None:
                 thread.join(max(0.0, deadline - time.monotonic()))
 
     def handle_error(self, request: Any, client_address: Any) -> None:
@@ -244,6 +249,10 @@ class UiServer:
         self._last = clock()
 
     @property
+    def stopped(self) -> bool:
+        return self._stopped.is_set()
+
+    @property
     def url(self) -> str:
         return "http://127.0.0.1:%d/#%s" % (self.port, self.token)
 
@@ -303,4 +312,7 @@ def try_lock_instance(directory: Path) -> Optional[IO[str]]:
     except BlockingIOError:
         handle.close()
         return None
+    except OSError:
+        handle.close()
+        raise
     return handle

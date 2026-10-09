@@ -161,7 +161,7 @@ def render_menu(config: Config, state: State, error: Optional[str], now: datetim
         out.append("---")
     out.extend(body)
     out.append("Poll now | " + _action(script_path, "refresh"))
-    out.append("Add / remove repos… | bash='%s' param1=setup terminal=true" % script_path)
+    out.append("Add / remove repos… | bash='%s' param1=ui terminal=false" % script_path)
     open_line = _open_config_line(config_path)
     if open_line:
         out.append(open_line)
@@ -180,7 +180,7 @@ def error_menu(reason: str, script_path: Optional[str] = None,
         try:
             extra = [
                 "Stop polling | " + _action(script_path, "stop"),
-                "Add / remove repos… | bash='%s' param1=setup terminal=true" % _check_arg(script_path),
+                "Add / remove repos… | bash='%s' param1=ui terminal=false" % _check_arg(script_path),
             ]
         except ValueError:
             extra = []

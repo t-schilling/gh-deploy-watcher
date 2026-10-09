@@ -8,6 +8,7 @@ import sys
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Callable, Dict, Iterator, List, Optional, TextIO, Tuple
 
 from gh_deploy_watcher.config import Config, ConfigError, config_dir, load_config
@@ -177,6 +178,34 @@ def main(argv: List[str], script_path: Optional[str] = None, runner: Runner = ru
         return 0
 
 
+def _ui(notify_fn: NotifyFn) -> int:
+    from gh_deploy_watcher import ui_api, ui_launcher, ui_server
+    lock = None
+    try:
+        lock = ui_server.try_lock_instance(config_dir())
+        if lock is None:
+            notify_fn("gh-deploy-watcher", "The selection window is already open")
+            return 0
+        package = Path(__file__).resolve().parent
+        server = ui_server.UiServer(static_dir=package / "ui")
+        try:
+            ui_api.install_routes(server)
+            server.start()
+            return ui_launcher.run_ui(server, ui_launcher.find_window(package.parent),
+                                      notify_fn=notify_fn)
+        finally:
+            server.shutdown()
+    except (ConfigError, ValueError, OSError) as exc:
+        try:
+            notify_fn("gh-deploy-watcher", "Could not open the selection window: %s" % exc)
+        except Exception:
+            pass
+        return 1
+    finally:
+        if lock is not None:
+            lock.close()
+
+
 def _dispatch(argv: List[str], script: str, runner: Runner, notify_fn: NotifyFn,
               confirm_fn: ConfirmFn, ts: float, out: TextIO) -> int:
     if not argv:
@@ -196,6 +225,8 @@ def _dispatch(argv: List[str], script: str, runner: Runner, notify_fn: NotifyFn,
         from gh_deploy_watcher import setup_wizard
         setup_wizard.run_wizard(config, runner)
         return 0
+    if cmd == "ui":
+        return _ui(notify_fn)
     if cmd == "rerun":
         flags = [a for a in args if a == "--dry-run"]
         pos = [a for a in args if a != "--dry-run"]
