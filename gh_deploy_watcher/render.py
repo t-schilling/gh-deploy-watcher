@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 from gh_deploy_watcher.config import Config, Workflow, config_dir
 from gh_deploy_watcher.model import (
@@ -55,9 +55,13 @@ def _action(script: str, *params: str) -> str:
     return " ".join(parts) + " terminal=false refresh=true"
 
 
-def _read(entry: Optional[dict], now: datetime) -> Tuple[str, Optional[Run], Optional[str], str]:
+def _read(entry: Any, now: datetime) -> Tuple[str, Optional[Run], Optional[str], str]:
     """Return (kind, run, message, age) where kind is run|none|error|unreadable."""
-    if not entry or ("run" in entry and entry["run"] is None):
+    if entry is None or entry == {}:
+        return "none", None, None, ""
+    if not isinstance(entry, dict):
+        return "unreadable", None, None, ""
+    if "run" in entry and entry["run"] is None:
         return "none", None, None, ""
     if "error" in entry:
         return "error", None, sanitize(entry["error"]), ""
@@ -100,8 +104,12 @@ def _workflow_lines(repo: str, wf: Workflow, entry: Optional[dict], now: datetim
         _CLASS_ICONS.get(cls, "⚪"), label, _CLASS_WORDS[cls], age, sanitize(run_ref(run.title)))
     lines = [head]
     if cls == "failed":
-        lines.append("--↻ Re-run failed jobs | " + _action(
-            script, "rerun", repo, str(run.id), wf.env))
+        try:
+            action = _action(script, "rerun", repo, str(run.id), wf.env)
+        except ValueError:
+            action = None  # unsafe value: omit the action, keep the status line
+        if action:
+            lines.append("--↻ Re-run failed jobs | " + action)
     lines.append("--↗ Open run | href=%s" % sanitize(run.url).replace(" ", "%20"))
     return lines, (wf.env, cls)
 

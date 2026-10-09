@@ -172,6 +172,31 @@ class MenuTests(unittest.TestCase):
             render_menu(config(), state(), None, NOW, "/tmp/it's/x.py")
 
 
+class RobustnessTests(unittest.TestCase):
+    def test_non_dict_entries_unreadable(self):
+        for bad in (5, [1, 2], "str", 1.5, True):
+            st = State(polling=True)
+            st.last["acme/api/deploy-prd.yaml"] = bad
+            st.last["acme/api/deploy-dev.yaml"] = run(2).to_dict()
+            out = render(st)
+            self.assertIn("unreadable", out, bad)
+            self.assertIn("DEV · EU", out)
+            self.assertEqual(first(out), "🟢")
+
+    def test_quote_in_repo_degrades_one_workflow(self):
+        cfg = Config([RepoConfig("acme/ap'i", [Workflow("a.yaml", "prd", "A")]),
+                      RepoConfig("acme/web", [Workflow("b.yaml", "prd", "B")])])
+        st = State(polling=True, last={
+            "acme/ap'i/a.yaml": run(5, conclusion="failure").to_dict(),
+            "acme/web/b.yaml": run(6, conclusion="failure").to_dict()})
+        out = render(st, cfg)
+        self.assertEqual(first(out), "🔴")
+        self.assertIn("failed", out)
+        self.assertEqual(out.count("Re-run failed jobs"), 1)
+        self.assertIn("param2=acme/web", out)
+        self.assertIn("Open run", out)
+
+
 class SanitizeTests(unittest.TestCase):
     def test_sanitize(self):
         self.assertEqual(sanitize("a|b\nc\r\nd"), "a b c  d")
