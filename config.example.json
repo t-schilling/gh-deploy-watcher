@@ -1,0 +1,11 @@
+{
+  "repos": [
+    {
+      "repo": "acme/api",
+      "workflows": [
+        { "file": "deploy-prd-eu.yaml", "env": "prd", "label": "PRD · EU" },
+        { "file": "deploy-dev-eu.yaml", "env": "dev", "label": "DEV · EU" }
+      ]
+    }
+  ]
+}
