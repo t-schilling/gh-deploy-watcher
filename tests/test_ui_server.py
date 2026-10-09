@@ -4,6 +4,7 @@ import contextlib
 import http.client
 import io
 import json
+import socket
 import tempfile
 import threading
 import unittest
@@ -316,6 +317,127 @@ class LifecycleTests(ServerCase):
         st, _, _ = self.req("POST", "/api/stop", "{}")
         self.assertEqual(st, 200)
         self.assertTrue(done.wait(5))
+
+
+class HardeningTests(ServerCase):
+    def raw(self, payload: bytes, shutdown_write: bool = False):
+        sock = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+        sock.sendall(payload)
+        chunks = []
+        while True:
+            try:
+                c = sock.recv(65536)
+            except OSError:
+                break
+            if not c:
+                break
+            chunks.append(c)
+        sock.close()
+        data = b"".join(chunks)
+        head, _, body = data.partition(b"\r\n\r\n")
+        lines = head.decode("latin-1").split("\r\n")
+        hdrs = {}
+        for ln in lines[1:]:
+            k, _, v = ln.partition(":")
+            hdrs[k.strip().lower()] = v.strip()
+        return lines[0], hdrs, body
+
+    def hostline(self):
+        return ("Host: 127.0.0.1:%d\r\n" % self.port).encode()
+
+    def run_quiet(self, fn):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            result = fn()
+        self.assertEqual(out.getvalue(), "")
+        self.assertEqual(err.getvalue(), "")
+        return result
+
+    def test_unserializable_body_500(self):
+        self.server.add_route("GET", r"/api/set", lambda r: Response(200, {1}))
+        st, h, b = self.run_quiet(lambda: self.req("GET", "/api/set"))
+        self.assertEqual(st, 500)
+        self.assert_headers(h)
+        self.assertEqual(json.loads(b)["error"]["kind"], "internal")
+
+    def test_none_and_bad_status_500(self):
+        self.server.add_route("GET", r"/api/none", lambda r: None)
+        self.server.add_route("GET", r"/api/status", lambda r: Response(99999, {}))
+        for p in ("/api/none", "/api/status"):
+            st, h, _ = self.run_quiet(lambda: self.req("GET", p))
+            self.assertEqual(st, 500, p)
+            self.assert_headers(h)
+
+    def check_raw_error(self, payload, code):
+        status, hdrs, body = self.run_quiet(lambda: self.raw(payload))
+        self.assertTrue(status.startswith("HTTP/1.0 %d" % code), status)
+        for k, v in HEADERS.items():
+            self.assertEqual(hdrs.get(k), v, k)
+        self.assertEqual(int(hdrs["content-length"]), len(body))
+        self.assertIn("error", json.loads(body))
+
+    def test_bad_request_line(self):
+        self.check_raw_error(b"GARBAGE\r\n\r\n", 400)
+
+    def test_long_uri(self):
+        self.check_raw_error(b"GET /" + b"a" * 70000 + b" HTTP/1.1\r\n\r\n", 414)
+
+    def test_too_many_headers(self):
+        hdrs = b"".join(b"X-%d: y\r\n" % i for i in range(150))
+        self.check_raw_error(b"GET / HTTP/1.1\r\n" + self.hostline() + hdrs + b"\r\n", 431)
+
+    def test_bad_http_version(self):
+        self.check_raw_error(b"GET / HTTP/2.0\r\n\r\n", 505)
+
+    def test_duplicate_security_headers_400(self):
+        tok = ("X-Token: %s\r\n" % self.server.token).encode()
+        good = self.hostline()
+        cases = [
+            b"GET /api/echo HTTP/1.1\r\nHost: evil\r\n" + good + tok + b"\r\n",
+            b"GET /api/echo HTTP/1.1\r\n" + good + tok + tok + b"\r\n",
+            b"GET /api/echo HTTP/1.1\r\n" + good + tok
+            + b"Origin: http://evil\r\nOrigin: http://127.0.0.1:%d\r\n\r\n" % self.port,
+            b"POST /api/post HTTP/1.1\r\n" + good + tok
+            + b"Origin: http://127.0.0.1:%d\r\n" % self.port
+            + b"Content-Type: application/json\r\nContent-Type: text/plain\r\n"
+            + b"Content-Length: 2\r\n\r\n{}",
+            b"POST /api/post HTTP/1.1\r\n" + good + tok
+            + b"Origin: http://127.0.0.1:%d\r\n" % self.port
+            + b"Content-Type: application/json\r\nContent-Length: 2\r\nContent-Length: 2\r\n\r\n{}",
+        ]
+        for c in cases:
+            self.check_raw_error(c, 400)
+
+    def test_unicode_digit_content_length_400(self):
+        st, _, _ = self.req("POST", "/api/post", None,
+                            raw_headers={"Content-Length": "\u00b2".encode("latin-1").decode("latin-1")})
+        self.assertEqual(st, 400)
+
+    def test_deeply_nested_json_400(self):
+        body = "[" * 100000 + "]" * 100000
+        st, _, b = self.run_quiet(lambda: self.req("POST", "/api/post", body))
+        self.assertEqual(st, 400)
+
+    def test_add_route_requires_api_prefix(self):
+        for pat in (r"/x", r"/", r"/app.js", r"/apix/y", r".*"):
+            with self.assertRaises(ValueError):
+                self.server.add_route("GET", pat, lambda r: Response(200, {}))
+
+    def test_no_python_version_in_server_header(self):
+        _, h, _ = self.req("GET", "/api/echo")
+        self.assertNotIn("python", h.get("server", "").lower())
+        status, hdrs, _ = self.raw(b"GARBAGE\r\n\r\n")
+        self.assertNotIn("python", hdrs.get("server", "").lower())
+
+    def test_wait_returns_after_server_fully_stopped(self):
+        done = threading.Event()
+        t = threading.Thread(target=lambda: (self.server.wait(), done.set()), daemon=True)
+        t.start()
+        st, _, b = self.req("POST", "/api/stop", "{}")
+        self.assertEqual((st, json.loads(b)), (200, {}))
+        self.assertTrue(done.wait(5))
+        with self.assertRaises(OSError):
+            socket.create_connection(("127.0.0.1", self.port), timeout=2)
 
 
 class LockTests(unittest.TestCase):
