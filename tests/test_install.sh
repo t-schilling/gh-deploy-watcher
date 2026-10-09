@@ -4,7 +4,7 @@
 set -u
 
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ROOT="$(mktemp -d "${TMPDIR:-/tmp}/ghdw-install-test.XXXXXX")"
+ROOT="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/ghdw-install-test.XXXXXX")" && pwd)"
 trap 'rm -rf "$ROOT"' EXIT
 
 FAILS=0
@@ -60,15 +60,15 @@ new_case() {
   chmod +x "$REPO/gh-deploy-watcher.1m.py"
   stub uname 'echo "${STUB_UNAME:-Darwin}"'
   stub python3 '[ "${STUB_PY:-3.12}" = 3.8 ] && exit 1; exit 0'
-  stub brew 'case "$1 $2 $3" in "list --cask swiftbar") [ -e "$STUB_APPS/swiftbar.marker" ]; exit ;; esac; exit 0'
+  stub brew 'exit 0'
   stub gh '[ "$1 $2" = "auth status" ] && { [ "${STUB_GH_AUTH:-ok}" = ok ]; exit; }; exit 0'
   stub fzf 'exit 0'
   stub defaults '[ -n "${STUB_SWIFTBAR_DIR:-}" ] && { echo "$STUB_SWIFTBAR_DIR"; exit 0; }; exit 1'
-  touch "$CASE/apps/swiftbar.marker"
+  mkdir -p "$CASE/apps/SwiftBar.app"
   local o
   for o in "$@"; do
     case "$o" in
-      swiftbar) rm -f "$CASE/apps/swiftbar.marker" ;;
+      swiftbar) rm -rf "$CASE/apps/SwiftBar.app" ;;
       *) rm -f "$BIN/$o" ;;
     esac
   done
