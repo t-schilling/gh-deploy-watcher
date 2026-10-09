@@ -15,7 +15,7 @@ from gh_deploy_watcher.github import GhError
 from gh_deploy_watcher.ui_api import install_routes
 from gh_deploy_watcher.ui_server import UiServer
 
-HOSTILE = "acme/ev\x1b[2J<script>|\nil‮"
+HOSTILE = "acme/ev\x1b[2J<script>|\nil\u202e"
 WORKFLOWS = (
     "PRD - Deploy to EU\t.github/workflows/deploy-prd.yml\tactive\n"
     "Dev Deploy\t.github/workflows/deploy-dev.yml\tactive\n"
@@ -124,7 +124,7 @@ class ReposTests(ApiCase):
         hostile = body[1]
         self.assertEqual(hostile["name"], HOSTILE.replace("\n", ""))
         self.assertEqual(hostile["display"], "acme/ev[2J<script>il")
-        for ch in ("\x1b", "|", "‮"):
+        for ch in ("\x1b", "|", "\u202e"):
             self.assertNotIn(ch, hostile["display"])
 
 
@@ -151,7 +151,7 @@ class WorkflowsTests(ApiCase):
         self.assertIsNone(body[1]["tracked"])
 
     def test_hostile_workflow_name_cleaned(self):
-        self.gh.workflows = "Dep\x1b[2Jloy | x‮\t.github/workflows/d.yml\tactive\n"
+        self.gh.workflows = "Dep\x1b[2Jloy | x\u202e\t.github/workflows/d.yml\tactive\n"
         _, body = self.get()
         self.assertEqual(body[0]["name"], "Dep[2Jloy x")
 
@@ -185,7 +185,7 @@ class PutTests(ApiCase):
 
     def test_labels_cleaned_and_empty_falls_back_to_stem(self):
         self.put([{"repo": "acme/api", "workflows": [
-            wf("a.yml", label="x\x1b[0m | y‮"), wf("b-c.yml", label=""),
+            wf("a.yml", label="x\x1b[0m | y\u202e"), wf("b-c.yml", label=""),
             wf("d.yml", label=" | ")]}])
         labels = [w.label for w in load_config().repos[0].workflows]
         self.assertEqual(labels, ["x[0m y", "b-c", "d"])
@@ -231,14 +231,14 @@ class PutTests(ApiCase):
         self.assertEqual(status, 400)
 
     def test_hostile_values_not_reflected(self):
-        evil = "ev\x1b[2J<script>‮"
+        evil = "ev\x1b[2J<script>\u202e"
         _, body = self.put([{"repo": "acme/api", "workflows": [wf(env=evil)]}])
         text = json.dumps(body, ensure_ascii=False)
-        for bad in ("\x1b", "<script>", "‮"):
+        for bad in ("\x1b", "\u202e"):
             self.assertNotIn(bad, text)
         _, body = self.put([{"repo": evil, "workflows": [wf()]}])
         text = json.dumps(body, ensure_ascii=False)
-        for bad in ("\x1b", "‮"):
+        for bad in ("\x1b", "\u202e"):
             self.assertNotIn(bad, text)
 
     def test_stale_hash_conflict_leaves_file(self):
@@ -268,7 +268,7 @@ class PutTests(ApiCase):
 class GhErrorTests(ApiCase):
     def test_kinds_map_to_502(self):
         for kind in ("auth", "not_found", "network"):
-            self.gh.error = GhError(kind, "boom \x1b[2J<x>|‮")
+            self.gh.error = GhError(kind, "boom \x1b[2J<x>|\u202e")
             for path in ("/api/session", "/api/repos", "/api/repos/acme/api/workflows"):
                 status, body = self.call("GET", path)
                 self.assertEqual(status, 502, path)
