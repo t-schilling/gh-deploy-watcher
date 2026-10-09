@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -52,7 +53,9 @@ def _build_config(body: Any) -> Config:
             if not isinstance(file, str) or not isinstance(env, str) \
                     or not isinstance(label, str):
                 raise ConfigError("file, env and label must be strings")
-            if file != os.path.basename(file) or clean(file) != file:
+            if file != os.path.basename(file) or clean(file) != file \
+                    or file.startswith(("-", ".")) \
+                    or not file.endswith((".yml", ".yaml")):
                 raise ConfigError("invalid workflow file name")
             stem = clean(os.path.splitext(file)[0])
             wfs.append({"file": file, "env": env, "label": clean(label) or stem})
@@ -62,6 +65,8 @@ def _build_config(body: Any) -> Config:
 
 def install_routes(server: UiServer, runner: Runner = run_gh,
                    config_path: Optional[Path] = None) -> None:
+    save_lock = threading.Lock()  # makes hash check + save + rehash atomic
+
     def session(req: Request) -> Response:
         return Response(200, {"login": clean(current_login(runner)),
                               "config": _config_json(load_config(config_path)),
@@ -94,14 +99,15 @@ def install_routes(server: UiServer, runner: Runner = run_gh,
         body = req.body
         if not isinstance(body, dict) or not isinstance(body.get("base_hash"), str):
             return _error(422, "validation", "body must be an object with a base_hash")
-        if body["base_hash"] != config_hash(config_path):
-            return _error(409, "conflict", "config changed on disk; reload and retry")
-        try:
-            config = _build_config(body)
-        except ConfigError as exc:
-            return _error(422, "validation", str(exc))
-        save_config(config, config_path)
-        return Response(200, {"config_hash": config_hash(config_path)})
+        with save_lock:
+            if body["base_hash"] != config_hash(config_path):
+                return _error(409, "conflict", "config changed on disk; reload and retry")
+            try:
+                config = _build_config(body)
+            except ConfigError as exc:
+                return _error(422, "validation", str(exc))
+            save_config(config, config_path)
+            return Response(200, {"config_hash": config_hash(config_path)})
 
     def done(req: Request) -> Response:
         server.shutdown()  # waits for this reply to be sent before closing

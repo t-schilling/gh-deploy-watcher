@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, List, Optional
@@ -111,6 +112,8 @@ def load_config(path: Optional[Path] = None) -> Config:
         return Config([])
     except OSError as exc:
         raise ConfigError("cannot read %s: %s" % (path, exc))
+    except UnicodeDecodeError:
+        raise ConfigError("%s is not valid UTF-8 text" % path)
     try:
         data = json.loads(text)
     except ValueError as exc:
@@ -133,6 +136,15 @@ def save_config(config: Config, path: Optional[Path] = None) -> None:
             for r in config.repos
         ]
     }
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-    os.replace(str(tmp), str(path))
+    # Unique temp file in the same directory so concurrent saves never share one.
+    fd, tmp = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(data, indent=2) + "\n")
+        os.replace(tmp, str(path))
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise

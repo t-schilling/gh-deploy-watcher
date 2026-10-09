@@ -273,8 +273,8 @@ class ConcurrencyTests(ApiCase):
             barrier = threading.Barrier(6)
             results = []
 
-            def worker(i):
-                repos = [{"repo": "acme/r%d" % i, "workflows": [wf()]}]
+            def worker(i, trial=trial):
+                repos = [{"repo": "acme/r%d-%d" % (trial, i), "workflows": [wf()]}]
                 barrier.wait()
                 results.append(self.put(repos, base_hash=base)[0])
 

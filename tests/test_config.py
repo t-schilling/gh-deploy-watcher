@@ -40,14 +40,14 @@ class ConfigTests(unittest.TestCase):
     def test_utf8_encoding_used_for_read_and_write(self):
         cfg = Config([RepoConfig("acme/api", [Workflow("d.yaml", "prd", "PRD \u00b7 EU")])])
         seen = []
-        real_w, real_r = Path.write_text, Path.read_text
-        def w(self_, data, *a, **k):
+        real_w, real_r = os.fdopen, Path.read_text
+        def w(fd, *a, **k):
             seen.append(k.get("encoding"))
-            return real_w(self_, data, *a, **k)
+            return real_w(fd, *a, **k)
         def r(self_, *a, **k):
             seen.append(k.get("encoding"))
             return real_r(self_, *a, **k)
-        with mock.patch.object(Path, "write_text", w), mock.patch.object(Path, "read_text", r):
+        with mock.patch("gh_deploy_watcher.config.os.fdopen", w), mock.patch.object(Path, "read_text", r):
             save_config(cfg, self.path)
             load_config(self.path)
         self.assertEqual(seen, ["utf-8", "utf-8"])
