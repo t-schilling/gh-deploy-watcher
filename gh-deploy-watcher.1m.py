@@ -3,36 +3,9 @@
 import os
 import sys
 
-SCRIPT = os.path.realpath(__file__)
-sys.path.insert(0, os.path.dirname(SCRIPT))
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 
-
-def main_fallback() -> None:
-    """Render from saved state until the actions module exists."""
-    from datetime import datetime, timezone
-
-    from gh_deploy_watcher.config import ConfigError, load_config
-    from gh_deploy_watcher.render import render_menu
-    from gh_deploy_watcher.state import load_state
-
-    from gh_deploy_watcher.config import Config
-    from gh_deploy_watcher.state import State
-
-    now = datetime.now(timezone.utc)
-    try:
-        config = load_config()
-        out = render_menu(config, load_state(), None, now, SCRIPT)
-    except (ConfigError, ValueError) as exc:
-        out = render_menu(Config([]), State(polling=True), str(exc), now, "/usr/bin/true")
-    sys.stdout.write(out)
-
+import gh_deploy_watcher.actions as actions  # noqa: E402
 
 if __name__ == "__main__":
-    try:
-        import gh_deploy_watcher.actions as actions
-    except ModuleNotFoundError as exc:
-        if exc.name != "gh_deploy_watcher.actions":
-            raise
-        main_fallback()
-    else:
-        actions.main(sys.argv[1:])
+    sys.exit(actions.main(sys.argv[1:], script_path=os.path.abspath(__file__)))

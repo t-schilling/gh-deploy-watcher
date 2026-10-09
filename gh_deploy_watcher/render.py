@@ -152,3 +152,8 @@ def render_menu(config: Config, state: State, error: Optional[str], now: datetim
     out.append("Open config | bash=/usr/bin/open param1=%s terminal=false"
                % str(config_dir() / "config.json").replace(" ", "%20"))
     return "\n".join(out) + "\n"
+
+
+def error_menu(reason: str) -> str:
+    """Minimal warning menu for problems that prevent a normal render."""
+    return "%s\n---\n%s\n" % (_ICONS["error"], sanitize(reason))

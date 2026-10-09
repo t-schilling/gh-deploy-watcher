@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 from gh_deploy_watcher.config import Config, RepoConfig, Workflow
 from gh_deploy_watcher.model import Run
-from gh_deploy_watcher.render import render_menu, sanitize
+from gh_deploy_watcher.render import error_menu, render_menu, sanitize
 from gh_deploy_watcher.state import State
 
 NOW = datetime(2026, 10, 9, 12, 0, 0, tzinfo=timezone.utc)
@@ -201,6 +201,17 @@ class SanitizeTests(unittest.TestCase):
     def test_sanitize(self):
         self.assertEqual(sanitize("a|b\nc\r\nd"), "a b c  d")
         self.assertEqual(sanitize("it's \"x\""), "its x")
+
+
+class ErrorMenuTests(unittest.TestCase):
+    def test_error_menu_is_warning_without_actions(self):
+        text = error_menu("bad | config\nline 'two'")
+        lines = text.splitlines()
+        self.assertEqual(lines[0], "\u26a0")
+        self.assertEqual(lines[1], "---")
+        self.assertEqual(len(lines), 3)
+        self.assertNotIn("|", text)
+        self.assertNotIn("bash=", text)
 
 
 if __name__ == "__main__":
