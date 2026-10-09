@@ -4,8 +4,12 @@ import contextlib
 import http.client
 import io
 import json
+import os
 import socket
+import subprocess
+import sys
 import tempfile
+import time
 import threading
 import unittest
 from pathlib import Path
@@ -438,6 +442,109 @@ class HardeningTests(ServerCase):
         self.assertTrue(done.wait(5))
         with self.assertRaises(OSError):
             socket.create_connection(("127.0.0.1", self.port), timeout=2)
+
+
+CHILD = """
+import sys, tempfile
+sys.path.insert(0, sys.argv[1])
+from pathlib import Path
+from gh_deploy_watcher.ui_server import Response, UiServer
+s = UiServer(Path(tempfile.mkdtemp()), token="tok")
+s.add_route("POST", r"/api/stop", lambda r: (s.shutdown(), Response(200, {}))[1])
+s.start()
+print(s.port, flush=True)
+s.wait()
+"""
+
+
+class RoundTwoTests(ServerCase):
+    def test_oserror_in_handler_gives_500(self):
+        calls = []
+
+        def make(exc):
+            def h(r):
+                calls.append(1)
+                raise exc
+            return h
+
+        self.server.add_route("GET", r"/api/oserr", make(OSError("disk")))
+        self.server.add_route("GET", r"/api/perm", make(PermissionError("nope-secret")))
+        self.server.add_route("GET", r"/api/fnf", lambda r: open("/nonexistent/x"))
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            for p in ("/api/oserr", "/api/perm", "/api/fnf"):
+                st, h, b = self.req("GET", p)
+                self.assertEqual(st, 500, p)
+                self.assert_headers(h)
+                self.assertEqual(json.loads(b)["error"]["kind"], "internal")
+                self.assertNotIn(b"nope-secret", b)
+        self.assertEqual(err.getvalue(), "")
+        self.assertEqual(len(calls), 2)
+
+    def test_client_disconnect_during_write(self):
+        self.server.add_route("GET", r"/api/bigout",
+                              lambda r: Response(200, raw=b"x" * 20000000))
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            sock = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+            sock.sendall(("GET /api/bigout HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nX-Token: %s\r\n\r\n"
+                          % (self.port, self.server.token)).encode())
+            sock.recv(10)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, b"\x01\x00\x00\x00\x00\x00\x00\x00")
+            sock.close()
+            time.sleep(0.5)
+            st, _, _ = self.req("GET", "/api/echo")
+        self.assertEqual(st, 200)
+        self.assertEqual(err.getvalue(), "")
+
+    def test_non_api_route_never_dispatched(self):
+        hit = []
+
+        def h(r):
+            hit.append(1)
+            return Response(200, {"secret": 1})
+
+        try:
+            self.server.add_route("GET", r"/api/x|/secret", h)
+        except ValueError:
+            pass
+        st, _, b = self.req("GET", "/secret", token=None)
+        self.assertEqual(st, 404)
+        self.assertEqual(hit, [])
+        self.assertNotIn(b"secret", b.replace(b"not found", b""))
+
+    def test_trickling_clients_do_not_hold_shutdown(self):
+        with tempfile.TemporaryDirectory() as d:
+            repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            proc = subprocess.Popen([sys.executable, "-c", CHILD, repo], cwd=d,
+                                    stdout=subprocess.PIPE, text=True)
+            self.addCleanup(proc.kill)
+            port = int(proc.stdout.readline())
+            stop = threading.Event()
+
+            def trickle():
+                sk = socket.create_connection(("127.0.0.1", port), timeout=5)
+                sk.sendall(b"GET / HTTP/1.1\r\nHost: 127.0.0.1:%d\r\n" % port)
+                while not stop.wait(2):
+                    try:
+                        sk.sendall(b"X-A: b\r\n")
+                    except OSError:
+                        break
+                sk.close()
+
+            threads = [threading.Thread(target=trickle, daemon=True) for _ in range(2)]
+            for t in threads:
+                t.start()
+            self.addCleanup(stop.set)
+            time.sleep(1)
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            conn.request("POST", "/api/stop", "{}", {
+                "Host": "127.0.0.1:%d" % port, "Origin": "http://127.0.0.1:%d" % port,
+                "X-Token": "tok", "Content-Type": "application/json"})
+            resp = conn.getresponse()
+            self.assertEqual(resp.status, 200)
+            resp.read()
+            self.assertEqual(proc.wait(timeout=8), 0)
 
 
 class LockTests(unittest.TestCase):
