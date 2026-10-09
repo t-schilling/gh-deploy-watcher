@@ -64,6 +64,23 @@ class JsTests(unittest.TestCase):
         self.assertNotIn('"style"', read("app.js"))
 
 
+class FixRoundTests(unittest.TestCase):
+    def test_ended_flag_stops_dirty_updates(self):
+        js = read("app.js")
+        self.assertIn("state.ended = true", js)
+        self.assertRegex(js, r"function renderSummary\(\) \{\s*if \(state\.ended\)")
+
+    def test_save_adopts_server_config(self):
+        js = read("app.js")
+        self.assertGreaterEqual(js.count('"/api/session"'), 2)
+        self.assertNotIn("{ repos: body.repos }", js)
+
+    def test_no_live_region_on_detail_panel(self):
+        html = read("index.html")
+        self.assertNotRegex(html, r'id="detail"[^>]*aria-live')
+        self.assertRegex(html, r'id="summary"[^>]*aria-live')
+
+
 class CssTests(unittest.TestCase):
     def test_media_features(self):
         css = read("app.css")
