@@ -84,7 +84,9 @@ class FixRoundTests(unittest.TestCase):
 class SessionLifetimeTests(unittest.TestCase):
     def test_heartbeat_every_30_seconds(self):
         js = read("app.js")
-        self.assertRegex(js, r"setInterval\([^;]*30000\)")
+        self.assertIn("HEARTBEAT_MS = 30000", js)
+        self.assertIn("setInterval(", js)
+        self.assertIn('api("GET", "/api/session")', js)
         self.assertIn("clearInterval", js)
 
     def test_pagehide_beacon_only_when_clean(self):

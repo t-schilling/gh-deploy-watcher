@@ -282,24 +282,24 @@ class LifecycleTests(ServerCase):
         self.assertEqual(UiServer(Path(".")).idle_seconds, 180.0)
 
     def test_idle_shutdown_and_touch(self):
-        self.clock.now += 899
+        self.clock.now += 179
         self.assertFalse(self.server.check_idle())
         self.server.touch()
-        self.clock.now += 899
+        self.clock.now += 179
         self.assertFalse(self.server.check_idle())
         self.clock.now += 2
         self.assertTrue(self.server.check_idle())
 
     def test_api_request_touches(self):
-        self.clock.now += 800
+        self.clock.now += 100
         self.req("GET", "/api/echo")
-        self.clock.now += 800
+        self.clock.now += 100
         self.assertFalse(self.server.check_idle())
 
     def test_rejected_request_does_not_touch(self):
-        self.clock.now += 800
+        self.clock.now += 100
         self.req("GET", "/api/echo", token="wrong")
-        self.clock.now += 101
+        self.clock.now += 81
         self.assertTrue(self.server.check_idle())
 
     def test_wait_returns_after_idle(self):
@@ -311,7 +311,7 @@ class LifecycleTests(ServerCase):
 
         t = threading.Thread(target=run, daemon=True)
         t.start()
-        self.clock.now += 901
+        self.clock.now += 181
         self.assertTrue(done.wait(5))
 
     def test_shutdown_idempotent(self):

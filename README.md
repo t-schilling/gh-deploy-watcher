@@ -91,7 +91,7 @@ Example `config.json`:
 - **Browser fallback.** If the window was not built, cannot start, or exits right away, the same page opens in your default browser instead. If even that fails, the URL is printed to the terminal. Nothing else changes; the window is optional.
 - **Terminal fallback.** `./gh-deploy-watcher.1m.py setup` runs the terminal wizard without any window or browser.
 - **Skip the window.** `./install.sh --no-window` does not build it. A failed build never fails the install; it prints a note that the page will open in the browser.
-- **Rebuild.** Run `bash ui-shell/build.sh` (it needs only the Command Line Tools and writes `build/GhDeployWatcher.app`), or just re-run `./install.sh`, which rebuilds when `ui-shell/` has changed. `GH_DEPLOY_WATCHER_BUILD_DIR` overrides the output folder of `build.sh`; the launcher only looks in `build/`.
+- **Rebuild.** Run `bash ui-shell/build.sh` (it needs only the Command Line Tools and writes `build/GhDeployWatcher.app`), or just re-run `./install.sh`, which rebuilds when `ui-shell/` has changed. `GH_DEPLOY_WATCHER_BUILD_DIR` overrides the output folder of `build.sh`; the launcher and `install.sh` honor the same variable and otherwise look in `build/`.
 - `./install.sh --uninstall` removes only the plugin symlink and leaves `build/` alone.
 
 ## Update
@@ -121,7 +121,11 @@ This removes only the symlink in the SwiftBar plugin folder. It never touches `~
 
 ## Security and privacy
 
-- No tokens are stored by this tool. It uses whatever login `gh` already has and only calls `gh`.
+- No tokens are stored by this tool. It uses whatever login `gh` already has and calls `gh` for all GitHub access.
+- The selection window runs a local HTTP server, only while the window is open. It binds `127.0.0.1` on a random port, never a network interface.
+- Each session has a random token that travels in the URL fragment (never sent as part of a request line) and must accompany every `/api/` call as an `X-Token` header; the page removes it from the address bar on load. The server also rejects requests whose `Host` or `Origin` is not exactly `127.0.0.1:<port>`.
+- The server writes only `config.json` in `~/.config/gh-deploy-watcher/`, through an atomic temp file with mode `0600`.
+- The page and the native window load nothing from the network: the page's content security policy allows only same-origin resources, and the window shell only opens the local URL it is given.
 - State and config stay on your machine in `~/.config/gh-deploy-watcher/`.
 - `Re-run failed jobs` on a PRD workflow redeploys production, which is why it asks first.
 
