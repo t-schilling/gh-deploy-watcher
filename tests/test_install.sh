@@ -70,7 +70,7 @@ new_case() {
   stub xcrun 'echo /fake/sdk'
   mkdir -p "$REPO/ui-shell/Sources"
   printf 'x\n' > "$REPO/ui-shell/Sources/main.swift"
-  printf '#!/bin/sh\nswift build -c release || exit 1\nd="$(cd "$(dirname "$0")/.." && pwd)/build/GhDeployWatcher.app/Contents/MacOS"\nmkdir -p "$d"\nprintf "#!/bin/sh\\n" > "$d/GhDeployWatcher"\nchmod +x "$d/GhDeployWatcher"\n' > "$REPO/ui-shell/build.sh"
+  printf '#!/bin/sh\nswift build -c release || exit 1\nd="${GH_DEPLOY_WATCHER_BUILD_DIR:-$(cd "$(dirname "$0")/.." && pwd)/build}/GhDeployWatcher.app/Contents/MacOS"\nmkdir -p "$d"\nprintf "#!/bin/sh\\n" > "$d/GhDeployWatcher"\nchmod +x "$d/GhDeployWatcher"\n' > "$REPO/ui-shell/build.sh"
   touch -t 202001010000 "$REPO/ui-shell/build.sh" "$REPO/ui-shell/Sources/main.swift"
   local o
   for o in "$@"; do
@@ -348,6 +348,23 @@ touch "$REPO/ui-shell/.build/artifact"
 run_install --yes --plugin-dir "$PLUGINS"
 assert_true ".build ignored" test "$(count_swift)" = 2
 assert_out_has "window: already built" ".build ignored says already built"
+
+# GH_DEPLOY_WATCHER_BUILD_DIR: build.sh builds there, so the staleness check must look there too
+new_case win_builddir
+ALT="$CASE/altbuild"
+alt_exe() { printf '%s/GhDeployWatcher.app/Contents/MacOS/GhDeployWatcher' "$ALT"; }
+EXTRA_ENV="GH_DEPLOY_WATCHER_BUILD_DIR=$ALT" run_install --yes --plugin-dir "$PLUGINS"
+assert_rc 0 "build dir build"
+assert_true "app built in the override dir" test -x "$(alt_exe)"
+assert_true "swift ran once (override)" test "$(count_swift)" = 1
+EXTRA_ENV="GH_DEPLOY_WATCHER_BUILD_DIR=$ALT" run_install --yes --plugin-dir "$PLUGINS"
+assert_rc 0 "build dir second run"
+assert_true "swift not re-run for the override dir" test "$(count_swift)" = 1
+assert_out_has "window: already built" "override dir counts as built"
+EXTRA_ENV="GH_DEPLOY_WATCHER_BUILD_DIR=" run_install --yes --plugin-dir "$PLUGINS"
+assert_rc 0 "empty build dir env"
+assert_true "empty env falls back to build/ and builds there" test -x "$(APP_EXE)"
+assert_true "swift ran for the default dir" test "$(count_swift)" = 2
 
 new_case win_noswift swift
 run_install --yes --plugin-dir "$PLUGINS"

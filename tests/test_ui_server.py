@@ -278,6 +278,9 @@ class LifecycleTests(ServerCase):
         self.assertEqual(out.getvalue(), "")
         self.assertEqual(err.getvalue(), "")
 
+    def test_default_idle_is_180_seconds(self):
+        self.assertEqual(UiServer(Path(".")).idle_seconds, 180.0)
+
     def test_idle_shutdown_and_touch(self):
         self.clock.now += 899
         self.assertFalse(self.server.check_idle())

@@ -107,7 +107,7 @@ class MenuTests(unittest.TestCase):
     def test_static_entries(self):
         out = render(state())
         for s in ("Stop polling", "Poll now", "param1=refresh", "Add / remove repos…",
-                  "param1=ui terminal=false"):
+                  "param1=ui terminal=false refresh=true"):
             self.assertIn(s, out)
         st = state()
         st.polling = False
@@ -237,6 +237,7 @@ class ErrorMenuActionsTests(unittest.TestCase):
                   "param1=stop", "Open config", "bash=/usr/bin/open"):
             self.assertIn(s, text)
         self.assertNotIn("bad |", text)
+        self.assertRegex(text, r"Add / remove repos… \| .*param1=ui terminal=false refresh=true")
 
     def test_no_open_config_when_file_missing(self):
         text = error_menu("x", SCRIPT, "/nonexistent/dir/config.json")
