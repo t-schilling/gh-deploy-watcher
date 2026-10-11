@@ -123,9 +123,9 @@ This removes only the symlink in the SwiftBar plugin folder. It never touches `~
 
 - No tokens are stored by this tool. It uses whatever login `gh` already has and calls `gh` for all GitHub access.
 - The selection window runs a local HTTP server, only while the window is open. It binds `127.0.0.1` on a random port, never a network interface.
-- Each session has a random token that travels in the URL fragment (never sent as part of a request line) and must accompany every `/api/` call as an `X-Token` header; the page removes it from the address bar on load. The server also rejects requests whose `Host` or `Origin` is not exactly `127.0.0.1:<port>`.
+- Each session has a random token that travels in the URL fragment (never sent as part of a request line) and must accompany every `/api/` call as an `X-Token` header; the page removes it from the address bar on load. The server also rejects any request whose `Host` is not exactly `127.0.0.1:<port>`, and any write whose `Origin` is not `http://127.0.0.1:<port>`.
 - The server writes only `config.json` in `~/.config/gh-deploy-watcher/`, through an atomic temp file with mode `0600`.
-- The page and the native window load nothing from the network: the page's content security policy allows only same-origin resources, and the window shell only opens the local URL it is given.
+- The page and the native window load nothing from the network: the page's content security policy allows only same-origin resources, and the window shell only loads the local URL it is given (links you click are handed to your default browser, http/https only).
 - State and config stay on your machine in `~/.config/gh-deploy-watcher/`.
 - `Re-run failed jobs` on a PRD workflow redeploys production, which is why it asks first.
 
