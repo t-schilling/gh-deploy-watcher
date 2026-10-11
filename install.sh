@@ -190,7 +190,7 @@ if [ ! -x "$ENTRY" ]; then
 fi
 
 # 8. native window (optional; a missing toolchain or failed build never fails the install)
-WINDOW_EXE="$REPO_DIR/build/GhDeployWatcher.app/Contents/MacOS/GhDeployWatcher"
+WINDOW_EXE="${GH_DEPLOY_WATCHER_BUILD_DIR:-$REPO_DIR/build}/GhDeployWatcher.app/Contents/MacOS/GhDeployWatcher"
 WINDOW_SRC="$REPO_DIR/ui-shell"
 window_stale() {
   [ -x "$WINDOW_EXE" ] || return 0

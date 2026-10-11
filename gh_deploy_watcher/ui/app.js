@@ -5,6 +5,8 @@
   "use strict";
 
   var SEP = "\u0000";
+  var HEARTBEAT_MS = 30000;
+  var SESSION_ENDED = "Session ended. Reopen it from the menu bar (Add / remove repos\u2026).";
   var root = typeof window !== "undefined" ? window : {}; // root.ghdwDirty is window.ghdwDirty
 
   // ---------------------------------------------------------------------
@@ -102,6 +104,7 @@
     query: "",
     saved: false,
     busy: false,
+    heartbeat: null,        // interval id of the keep-alive ping
     ended: false            // set once Cancel, Done or an invalid session closes the page
   };
 
@@ -163,6 +166,7 @@
         throw apiError(res.status, e.kind || "http", e.message || ("HTTP " + res.status));
       });
     }, function () {
+      sessionLost();
       throw apiError(0, "network", "Cannot reach the local server.");
     });
   }
@@ -222,15 +226,51 @@
     slot.appendChild(box);
   }
 
+  /** The server is unreachable: say so, keep every edit on screen, stop pinging. */
+  function sessionLost() {
+    if (state.ended) { return; }
+    state.ended = true;
+    stopHeartbeat();
+    $("save").disabled = true;
+    $("done").disabled = true;
+    showNotice("error", SESSION_ENDED);
+  }
+
+  function stopHeartbeat() {
+    if (state.heartbeat !== null) { clearInterval(state.heartbeat); state.heartbeat = null; }
+  }
+
+  /** Touches the server only; never the page state, dirty flag or loaded config. */
+  function startHeartbeat() {
+    state.heartbeat = setInterval(function () {
+      if (state.ended) { stopHeartbeat(); return; }
+      api("GET", "/api/session").then(null, function (err) {
+        if (err.status === 401) { showInvalidSession(); }
+      });
+    }, HEARTBEAT_MS);
+  }
+
+  /** Closing a clean tab ends the session so it can be reopened at once. */
+  function onPageHide() {
+    if (state.token && !root.ghdwDirty && !state.ended) {
+      try {
+        fetch("/api/done", { method: "POST", keepalive: true,
+          headers: { "X-Token": state.token, "Content-Type": "application/json" }, body: "{}" })
+          .then(null, function () { /* nothing to do */ });
+      } catch (e) { /* ignore */ }
+    }
+  }
+
   function endSession(kind, message) {
     state.ended = true;
+    stopHeartbeat();
     document.body.classList.add("over");
     root.ghdwDirty = false;
     showNotice(kind, message);
   }
 
   function showInvalidSession() {
-    endSession("error", "Invalid session. Start the selection UI again from gh-deploy-watcher.");
+    endSession("error", SESSION_ENDED);
   }
 
   function showSignedOut() {
@@ -616,6 +656,8 @@
     state.token = takeToken();
     if (!state.token) { showInvalidSession(); return; }
     bindControls();
+    startHeartbeat();
+    window.addEventListener("pagehide", onPageHide);
     renderDetail();
     renderSummary();
     loadAll();

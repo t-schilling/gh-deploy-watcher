@@ -81,6 +81,27 @@ class FixRoundTests(unittest.TestCase):
         self.assertRegex(html, r'id="summary"[^>]*aria-live')
 
 
+class SessionLifetimeTests(unittest.TestCase):
+    def test_heartbeat_every_30_seconds(self):
+        js = read("app.js")
+        self.assertIn("HEARTBEAT_MS = 30000", js)
+        self.assertIn("setInterval(", js)
+        self.assertIn('api("GET", "/api/session")', js)
+        self.assertIn("clearInterval", js)
+
+    def test_pagehide_beacon_only_when_clean(self):
+        js = read("app.js")
+        self.assertIn('"pagehide"', js)
+        self.assertNotIn("visibilitychange", js)
+        self.assertIn("keepalive: true", js)
+        self.assertRegex(js, r"!root\.ghdwDirty\s*&&\s*!state\.ended")
+
+    def test_session_ended_message(self):
+        js = read("app.js")
+        self.assertIn("Session ended. Reopen it from the menu bar (Add / remove repos\\u2026).", js)
+        self.assertNotIn("Invalid session", js)
+
+
 class CssTests(unittest.TestCase):
     def test_media_features(self):
         css = read("app.css")

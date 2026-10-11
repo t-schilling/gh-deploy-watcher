@@ -111,17 +111,18 @@ class Notes:
 class LauncherCase(unittest.TestCase):
     def setUp(self):
         self.clock = Clock()
-        self.server = UiServer(Path("."), idle_seconds=900.0, clock=self.clock, token=URL_TOKEN)
+        self.server = UiServer(Path("."), idle_seconds=180.0, clock=self.clock, token=URL_TOKEN)
         self.browser = Browser()
         self.notes = Notes()
         self.window = Path("/tmp/GhDeployWatcher")
 
     def run_ui(self, spawner, window="default", **kw):
+        kw.setdefault("sleep", self.clock.sleep)
         err = io.StringIO()
         with redirect_stderr(err):
             rc = run_ui(self.server, self.window if window == "default" else window,
                         spawn=spawner, open_browser=self.browser, notify_fn=self.notes,
-                        monotonic=self.clock, sleep=self.clock.sleep, **kw)
+                        monotonic=self.clock, **kw)
         self.err = err.getvalue()
         return rc
 
@@ -190,6 +191,9 @@ class RunUiTests(LauncherCase):
         self.assertEqual(len(self.notes.items), 1)
         for part in self.notes.items[0]:
             self.assertNotIn(URL_TOKEN, part)
+        message = self.notes.items[0][1]
+        self.assertNotIn("printed to the terminal", message)  # false from the menu (terminal=false)
+        self.assertIn("./gh-deploy-watcher.1m.py ui", message)
 
     def test_browser_exception_prints_url_and_notifies(self):
         self.browser.error = OSError("boom")
@@ -200,10 +204,32 @@ class RunUiTests(LauncherCase):
         self.assertIn(self.server.url, self.err)
         self.assertEqual(len(self.notes.items), 1)
 
+    def test_idle_timeout_never_kills_a_live_window(self):
+        # Local edits never touch the server; the window exiting is the stop signal.
+        sp = Spawner(self.clock, exit_after=3600, code=0)
+        self.assertEqual(self.run_ui(sp), 0)
+        self.assertFalse(sp.proc.terminated)
+        self.assertGreaterEqual(self.clock() - sp.proc.start, 3600)
+        self.assertEqual(self.browser.urls, [])
+
+    def test_idle_timeout_applies_after_window_is_gone(self):
+        # Quick crash falls back to the browser, where the idle timeout does apply.
+        sp = Spawner(self.clock, exit_after=1, code=1)
+        self.assertEqual(self.run_ui(sp), 0)
+        self.assertEqual(self.browser.urls, [self.server.url])
+        self.assertTrue(self.server.stopped)
+        self.assertGreater(self.clock() - sp.proc.start, 180)
+
     def test_server_shutdown_first_terminates_window(self):
         sp = Spawner(self.clock)  # never exits
-        self.server.idle_seconds = 30.0
-        self.assertEqual(self.run_ui(sp), 0)
+        ticks = {"n": 0}
+
+        def sleep(seconds):
+            ticks["n"] += 1
+            if ticks["n"] == 10:
+                self.server.shutdown()  # e.g. the page's Done
+            self.clock.sleep(seconds)
+        self.assertEqual(self.run_ui(sp, sleep=sleep), 0)
         self.assertTrue(sp.proc.terminated)
         self.assertEqual(self.browser.urls, [])
 
@@ -261,8 +287,14 @@ class RunUiTests(LauncherCase):
 
             def poll(self):
                 return None
-        self.server.idle_seconds = 5.0
-        self.run_ui(lambda argv, **kw: Stubborn(self.clock))
+        ticks = {"n": 0}
+
+        def sleep(seconds):
+            ticks["n"] += 1
+            if ticks["n"] == 10:
+                self.server.shutdown()
+            self.clock.sleep(seconds)
+        self.run_ui(lambda argv, **kw: Stubborn(self.clock), sleep=sleep)
         self.assertEqual(events[-1], "wait")
         self.assertIn("kill", events)
 
@@ -290,6 +322,28 @@ class RealPopenTests(unittest.TestCase):
 
 
 class FindWindowTests(unittest.TestCase):
+    def test_honors_build_dir_env(self):
+        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as other:
+            root = Path(d)
+            macos = Path(other) / "GhDeployWatcher.app" / "Contents" / "MacOS"
+            macos.mkdir(parents=True)
+            exe = macos / "GhDeployWatcher"
+            exe.write_text("#!/bin/sh\n")
+            exe.chmod(0o755)
+            old = os.environ.get("GH_DEPLOY_WATCHER_BUILD_DIR")
+            try:
+                os.environ["GH_DEPLOY_WATCHER_BUILD_DIR"] = other
+                self.assertEqual(find_window(root), exe)
+                os.environ["GH_DEPLOY_WATCHER_BUILD_DIR"] = ""  # empty means unset
+                self.assertIsNone(find_window(root))
+                del os.environ["GH_DEPLOY_WATCHER_BUILD_DIR"]
+                self.assertIsNone(find_window(root))
+            finally:
+                if old is None:
+                    os.environ.pop("GH_DEPLOY_WATCHER_BUILD_DIR", None)
+                else:
+                    os.environ["GH_DEPLOY_WATCHER_BUILD_DIR"] = old
+
     def test_find_window(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)

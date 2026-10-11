@@ -18,7 +18,8 @@ _WINDOW_NAME = "GhDeployWatcher"
 
 
 def find_window(repo_root: Path) -> Optional[Path]:
-    exe = Path(repo_root) / "build" / (_WINDOW_NAME + ".app") / "Contents" / "MacOS" / _WINDOW_NAME
+    build = os.environ.get("GH_DEPLOY_WATCHER_BUILD_DIR") or str(Path(repo_root) / "build")
+    exe = Path(build) / (_WINDOW_NAME + ".app") / "Contents" / "MacOS" / _WINDOW_NAME
     return exe if exe.is_file() and os.access(str(exe), os.X_OK) else None
 
 
@@ -70,11 +71,14 @@ def run_ui(server: UiServer, window: Optional[Path], spawn: Callable[..., Any] =
                 if code is not None:
                     proc = None
                     if code != 0 and monotonic() - started < _QUICK_EXIT_SECONDS:
+                        server.touch()  # start the browser's idle window afresh
                         _browser_fallback(server, open_browser, notify_fn)
                     else:
                         server.shutdown()  # window closed (or crashed late): user is done
                         break
-            if server.check_idle():
+            # While the window lives, its exit is the stop signal: local edits never
+            # touch the server, so idleness says nothing about a window in use.
+            if proc is None and server.check_idle():
                 break
             sleep(_POLL_SECONDS)
     finally:
@@ -92,9 +96,10 @@ def _browser_fallback(server: UiServer, open_browser: Callable[[str], bool],
         opened = False
     if opened:
         return
-    # Last resort, the user's explicit choice: the URL (with its token) on stderr.
+    # Last resort, the user's explicit choice: the URL (with its token) on stderr
+    # (visible only when run from a terminal; the notification never carries it).
     sys.stderr.write("Open this URL in a browser: %s\n" % server.url)
     try:
-        notify_fn("gh-deploy-watcher", "Could not open the selection window; the URL was printed to the terminal")
+        notify_fn("gh-deploy-watcher", "Could not open a window or browser. Run ./gh-deploy-watcher.1m.py ui in a terminal.")
     except Exception:
         pass

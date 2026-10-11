@@ -233,7 +233,7 @@ class _RequestHandler(BaseHTTPRequestHandler):
 
 
 class UiServer:
-    def __init__(self, static_dir: Path, idle_seconds: float = 900.0,
+    def __init__(self, static_dir: Path, idle_seconds: float = 180.0,
                  clock: Callable[[], float] = time.monotonic,
                  token: Optional[str] = None) -> None:
         self.static_dir = Path(static_dir)
