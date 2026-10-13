@@ -499,8 +499,10 @@ class ToggleTests(ActionBase):
 
     def test_toggle_during_poll_not_lost(self):
         save_state(State(polling=True))
+        toggled = []
         def mid_poll():
-            self.main(["toggle", "acme/web"], FakeRunner())
+            if not toggled:  # once: the callback runs for every workflow
+                toggled.append(self.main(["toggle", "acme/web"], FakeRunner()))
             return run_json(1)
         self.main([], FakeRunner(default=mid_poll))
         self.assertEqual(load_state().collapsed, ["acme/web"])

@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, Iterator, List, Optional, TextIO, Tuple
 
-from gh_deploy_watcher.config import Config, ConfigError, config_dir, load_config
+from gh_deploy_watcher.config import Config, ConfigError, config_dir, load_config, valid_repo_name
 from gh_deploy_watcher.github import GhError, Runner, latest_run, rerun_failed, rerun_failed_args, run_gh
 from gh_deploy_watcher.model import Run, classify, env_visible, new_failures, run_ref, workflow_key
 from gh_deploy_watcher.notify import confirm, notify
@@ -96,6 +96,29 @@ def _update(**fields: object) -> None:
         save_state(state)
 
 
+def _prune_collapsed(names: List[str], config: Config, keep: Optional[str] = None) -> List[str]:
+    """Drop collapsed entries whose repo is no longer configured (keep is exempt)."""
+    known = {r.repo for r in config.repos}
+    return [n for n in names if n in known or n == keep]
+
+
+def _toggle(repo: str) -> None:
+    """Flip one repo in state.collapsed under the lock, so no update is lost."""
+    try:
+        config: Optional[Config] = load_config()
+    except ConfigError:
+        config = None  # a broken config must not stop the user from collapsing
+    with _locked():
+        state = load_state()
+        if repo in state.collapsed:
+            state.collapsed.remove(repo)
+        else:
+            state.collapsed.append(repo)
+        if config is not None:
+            state.collapsed = _prune_collapsed(state.collapsed, config, keep=repo)
+        save_state(state)
+
+
 def _refresh(config: Config, runner: Runner, notify_fn: NotifyFn, now: float,
              baseline: bool = False) -> Optional[str]:
     """Poll off-lock, merge into the on-disk state under lock, save, then notify."""
@@ -111,6 +134,7 @@ def _refresh(config: Config, runner: Runner, notify_fn: NotifyFn, now: float,
             if before.get(k) != v:
                 disk.last[k] = v
         disk.last_poll = now
+        disk.collapsed = _prune_collapsed(disk.collapsed, config)
         disk.notified.extend(i for i in state.notified if i not in disk.notified)
         for key in keys:
             run = _cached_run(state.last.get(key))
@@ -235,6 +259,11 @@ def _dispatch(argv: List[str], script: str, runner: Runner, notify_fn: NotifyFn,
         return rerun(pos[0], pos[1], pos[2], bool(flags), confirm_fn, runner, notify_fn, ts, out)
     if cmd == "filter" and (len(args) != 1 or args[0] not in VALID_FILTERS):
         return _fail("invalid filter %r: expected one of %s" % (args[:1], ", ".join(VALID_FILTERS)))
+    if cmd == "toggle":
+        if len(args) != 1 or not valid_repo_name(args[0]):
+            return _fail("usage: toggle <owner/name>")
+        _toggle(args[0])  # no refresh: the menu re-renders from cached runs
+        return 0
     if cmd not in ("start", "stop", "filter", "refresh"):
         return _fail("unknown command %r" % cmd)
     if cmd == "stop":
