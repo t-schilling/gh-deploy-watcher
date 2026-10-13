@@ -54,6 +54,24 @@ class StateTests(unittest.TestCase):
         save_state(s, self.path)
         self.assertEqual(load_state(self.path), s)
 
+    def test_collapsed_roundtrip(self):
+        s = State(collapsed=["acme/api", "acme/web"])
+        save_state(s, self.path)
+        self.assertEqual(json.loads(self.path.read_text())["collapsed"], ["acme/api", "acme/web"])
+        self.assertEqual(load_state(self.path), s)
+
+    def test_collapsed_missing_key_is_empty(self):
+        self.path.write_text(json.dumps({"polling": True}))
+        self.assertEqual(load_state(self.path).collapsed, [])
+
+    def test_collapsed_malformed_values_dropped(self):
+        self.path.write_text(json.dumps({"collapsed": [
+            "acme/api", 5, None, ["x"], "noslash", "a/b/c", "acme/api", "../x", "acme/web", "bad name/x", True]}))
+        self.assertEqual(load_state(self.path).collapsed, ["acme/api", "acme/web"])
+        for bad in ("acme/api", {"acme/api": 1}, 7, None):
+            self.path.write_text(json.dumps({"collapsed": bad}))
+            self.assertEqual(load_state(self.path).collapsed, [])
+
     def test_invalid_filter_resets_to_both(self):
         self.path.write_text(json.dumps({"filter": "staging"}))
         self.assertEqual(load_state(self.path).filter, "both")
