@@ -72,6 +72,15 @@ class StateTests(unittest.TestCase):
             self.path.write_text(json.dumps({"collapsed": bad}))
             self.assertEqual(load_state(self.path).collapsed, [])
 
+    def test_collapsed_capped_and_fast(self):
+        import time
+        names = ["acme/r%d" % i for i in range(10000)] * 2
+        self.path.write_text(json.dumps({"collapsed": names}))
+        t = time.monotonic()
+        loaded = load_state(self.path).collapsed
+        self.assertLess(time.monotonic() - t, 2.0)
+        self.assertEqual(loaded, names[:500])
+
     def test_invalid_filter_resets_to_both(self):
         self.path.write_text(json.dumps({"filter": "staging"}))
         self.assertEqual(load_state(self.path).filter, "both")

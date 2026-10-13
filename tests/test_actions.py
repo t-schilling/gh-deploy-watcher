@@ -497,6 +497,40 @@ class ToggleTests(ActionBase):
         self.main(["refresh"], FakeRunner())
         self.assertEqual(load_state().collapsed, ["acme/api"])
 
+    def test_empty_config_never_wipes_collapsed(self):
+        save_config(Config([]))
+        save_state(State(collapsed=["acme/api", "acme/web"]))
+        self.main(["refresh"], FakeRunner())
+        self.assertEqual(load_state().collapsed, ["acme/api", "acme/web"])
+        self.main(["toggle", "acme/api"], FakeRunner())
+        self.assertEqual(load_state().collapsed, ["acme/web"])
+        self.main(["toggle", "other/repo"], FakeRunner())
+        self.assertEqual(load_state().collapsed, ["acme/web", "other/repo"])
+
+    def test_missing_config_never_wipes_collapsed(self):
+        save_state(State(collapsed=["acme/api"]))
+        (Path(self._tmp.name) / "config.json").unlink()
+        self.main(["refresh"], FakeRunner())
+        self.assertEqual(load_state().collapsed, ["acme/api"])
+
+    def test_concurrent_toggles_need_the_lock(self):
+        import threading, time
+        from unittest import mock
+        save_config(Config([]))  # empty config: no pruning, so every toggle must survive
+        real = actions.load_state
+        def slow_load(*a, **kw):
+            st = real(*a, **kw)
+            time.sleep(0.02)  # widen the read-modify-write window
+            return st
+        names = ["acme/r%d" % i for i in range(8)]
+        with mock.patch.object(actions, "load_state", slow_load):
+            threads = [threading.Thread(target=actions._toggle, args=(n,)) for n in names]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+        self.assertEqual(sorted(load_state().collapsed), sorted(names))
+
     def test_toggle_during_poll_not_lost(self):
         save_state(State(polling=True))
         toggled = []
