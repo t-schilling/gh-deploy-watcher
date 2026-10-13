@@ -1,4 +1,4 @@
-"""Persist watcher runtime state (polling flag, filter, cached runs)."""
+"""Persist watcher runtime state (polling flag, filter, collapsed repos, cached runs)."""
 from __future__ import annotations
 
 import json
@@ -9,9 +9,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from gh_deploy_watcher.config import config_dir
+from gh_deploy_watcher.config import config_dir, valid_repo_name
 
 VALID_FILTERS = ("both", "prd", "dev")
+_COLLAPSED_CAP = 500
 _KEY_RE = re.compile(r"[0-9]+:[0-9]+")
 
 
@@ -22,6 +23,7 @@ class State:
     last: Dict[str, dict] = field(default_factory=dict)
     last_poll: Optional[float] = None
     notified: List[str] = field(default_factory=list)
+    collapsed: List[str] = field(default_factory=list)
 
 
 def _default_path() -> Path:
@@ -58,6 +60,15 @@ def _parse(data: Any) -> State:
     notified = data.get("notified")
     if isinstance(notified, list):
         state.notified = [k for k in (_notify_key(n) for n in notified) if k]
+    collapsed = data.get("collapsed")
+    if isinstance(collapsed, list):
+        seen = set()
+        for name in collapsed:
+            if len(state.collapsed) >= _COLLAPSED_CAP:
+                break
+            if valid_repo_name(name) and name not in seen:
+                seen.add(name)
+                state.collapsed.append(name)
     return state
 
 
@@ -80,6 +91,7 @@ def save_state(state: State, path: Optional[Path] = None) -> None:
         "last": state.last,
         "last_poll": state.last_poll,
         "notified": state.notified,
+        "collapsed": state.collapsed,
     }
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
     try:

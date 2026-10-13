@@ -451,6 +451,97 @@ class FinalFixMainTests(ActionBase):
         self.assertIn("3:1", load_state().notified)
 
 
+class ToggleTests(ActionBase):
+    def test_toggle_both_directions_without_network(self):
+        r = FakeRunner()
+        self.assertEqual(self.main(["toggle", "acme/api"], r), 0)
+        self.assertEqual(load_state().collapsed, ["acme/api"])
+        self.assertEqual(self.main(["toggle", "acme/web"], r), 0)
+        self.assertEqual(load_state().collapsed, ["acme/api", "acme/web"])
+        self.assertEqual(self.main(["toggle", "acme/api"], r), 0)
+        self.assertEqual(load_state().collapsed, ["acme/web"])
+        self.assertEqual(r.calls, [])
+        self.assertEqual(self.out.getvalue(), "")
+
+    def test_toggle_keeps_other_state(self):
+        save_state(State(polling=True, filter="prd", last={PRD: {"id": 1}}, notified=["1:1"]))
+        self.main(["toggle", "acme/api"], FakeRunner())
+        st = load_state()
+        self.assertEqual((st.polling, st.filter, st.last, st.notified),
+                         (True, "prd", {PRD: {"id": 1}}, ["1:1"]))
+
+    def test_toggle_invalid_arg(self):
+        for argv in (["toggle"], ["toggle", "nope"], ["toggle", "a/b", "c/d"],
+                     ["toggle", "../x"], ["toggle", "acme/api' param2=x"]):
+            err = io.StringIO()
+            with redirect_stderr(err):
+                self.assertNotEqual(self.main(argv, FakeRunner()), 0, argv)
+            self.assertNotEqual(err.getvalue(), "")
+        self.assertEqual(load_state().collapsed, [])
+
+    def test_toggle_stale_name_stored_then_pruned_on_next_toggle(self):
+        self.main(["toggle", "gone/repo"], FakeRunner())
+        self.assertEqual(load_state().collapsed, ["gone/repo"])
+        self.main(["toggle", "acme/api"], FakeRunner())
+        self.assertEqual(load_state().collapsed, ["acme/api"])
+        self.main(["toggle", "acme/api"], FakeRunner())
+        self.assertEqual(load_state().collapsed, [])
+
+    def test_toggle_with_corrupt_config_still_flips(self):
+        (Path(self._tmp.name) / "config.json").write_text("{bad")
+        self.assertEqual(self.main(["toggle", "acme/api"], FakeRunner()), 0)
+        self.assertEqual(load_state().collapsed, ["acme/api"])
+
+    def test_refresh_keeps_collapsed_and_prunes_stale(self):
+        save_state(State(collapsed=["acme/api", "gone/repo"]))
+        self.main(["refresh"], FakeRunner())
+        self.assertEqual(load_state().collapsed, ["acme/api"])
+
+    def test_empty_config_never_wipes_collapsed(self):
+        save_config(Config([]))
+        save_state(State(collapsed=["acme/api", "acme/web"]))
+        self.main(["refresh"], FakeRunner())
+        self.assertEqual(load_state().collapsed, ["acme/api", "acme/web"])
+        self.main(["toggle", "acme/api"], FakeRunner())
+        self.assertEqual(load_state().collapsed, ["acme/web"])
+        self.main(["toggle", "other/repo"], FakeRunner())
+        self.assertEqual(load_state().collapsed, ["acme/web", "other/repo"])
+
+    def test_missing_config_never_wipes_collapsed(self):
+        save_state(State(collapsed=["acme/api"]))
+        (Path(self._tmp.name) / "config.json").unlink()
+        self.main(["refresh"], FakeRunner())
+        self.assertEqual(load_state().collapsed, ["acme/api"])
+
+    def test_concurrent_toggles_need_the_lock(self):
+        import threading, time
+        from unittest import mock
+        save_config(Config([]))  # empty config: no pruning, so every toggle must survive
+        real = actions.load_state
+        def slow_load(*a, **kw):
+            st = real(*a, **kw)
+            time.sleep(0.02)  # widen the read-modify-write window
+            return st
+        names = ["acme/r%d" % i for i in range(8)]
+        with mock.patch.object(actions, "load_state", slow_load):
+            threads = [threading.Thread(target=actions._toggle, args=(n,)) for n in names]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+        self.assertEqual(sorted(load_state().collapsed), sorted(names))
+
+    def test_toggle_during_poll_not_lost(self):
+        save_state(State(polling=True))
+        toggled = []
+        def mid_poll():
+            if not toggled:  # once: the callback runs for every workflow
+                toggled.append(self.main(["toggle", "acme/web"], FakeRunner()))
+            return run_json(1)
+        self.main([], FakeRunner(default=mid_poll))
+        self.assertEqual(load_state().collapsed, ["acme/web"])
+
+
 class ConcurrencyTests(ActionBase):
     def test_lost_pause_and_filter(self):
         save_state(State(polling=True))

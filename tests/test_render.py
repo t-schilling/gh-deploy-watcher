@@ -219,6 +219,120 @@ class RobustnessTests(unittest.TestCase):
         self.assertIn("Open run", out)
 
 
+def header(out, repo="acme/api"):
+    return [l for l in out.splitlines() if repo in l and l[:1] in "▾▸"][0]
+
+
+def lines_of(out, text):
+    return [l for l in out.splitlines() if text in l]
+
+
+class CollapseTests(unittest.TestCase):
+    def test_expanded_header_and_workflows(self):
+        out = render(state(prd=run(), dev=run(2)))
+        self.assertTrue(header(out).startswith("▾ acme/api | "))
+        self.assertIn("bash='%s' param1=toggle param2=acme/api terminal=false refresh=true"
+                      % SCRIPT, header(out))
+        self.assertIn("PRD · EU", out)
+        self.assertIn("DEV · EU", out)
+
+    def test_collapsed_all_green(self):
+        out = render(state(prd=run(), dev=run(2), collapsed=["acme/api"]))
+        self.assertTrue(header(out).startswith("▸ acme/api  🟢 2/2 | "))
+        self.assertIn("param1=toggle param2=acme/api", header(out))
+        self.assertNotIn("PRD · EU", out)
+        self.assertNotIn("Open run", out)
+        self.assertEqual(first(out), "🟢")
+
+    def test_collapsed_failing(self):
+        st = state(prd=run(conclusion="failure"), dev=run(2), collapsed=["acme/api"])
+        out = render(st)
+        self.assertTrue(header(out).startswith("▸ acme/api  🔴 1 failed · 🟢 1 | "))
+        self.assertNotIn("Re-run", out)
+
+    def test_collapsed_running(self):
+        st = state(prd=run(status="in_progress", conclusion=None), dev=run(2), collapsed=["acme/api"])
+        self.assertTrue(header(render(st)).startswith("▸ acme/api  🟡 1 running · 🟢 1 | "))
+
+    def test_collapsed_error_and_other(self):
+        st = state(prd={"error": "boom"}, dev={"run": None}, collapsed=["acme/api"])
+        out = render(st)
+        self.assertTrue(header(out).startswith("▸ acme/api  ⚠ 1 error · ⚪ 1 other | "))
+        self.assertNotIn("boom", out)
+        st = state(prd=run(conclusion="cancelled"), dev={"id": 1}, collapsed=["acme/api"])
+        self.assertTrue(header(render(st)).startswith("▸ acme/api  ⚪ 2 other | "))
+
+    def test_collapsed_everything_mixed_order(self):
+        cfg = Config([RepoConfig("acme/api", [
+            Workflow("a.yaml", "prd", "A"), Workflow("b.yaml", "prd", "B"),
+            Workflow("c.yaml", "prd", "C"), Workflow("d.yaml", "prd", "D")])])
+        st = State(polling=True, collapsed=["acme/api"], last={
+            "acme/api/a.yaml": run(1).to_dict(),
+            "acme/api/b.yaml": run(2, conclusion="failure").to_dict(),
+            "acme/api/c.yaml": run(3, status="queued", conclusion=None).to_dict(),
+            "acme/api/d.yaml": {"error": "x"}})
+        self.assertTrue(header(render(st, cfg)).startswith(
+            "▸ acme/api  🔴 1 failed · 🟡 1 running · ⚠ 1 error · 🟢 1 | "))
+
+    def test_collapsed_no_runs_yet_not_green(self):
+        out = render(state(collapsed=["acme/api"]))
+        self.assertTrue(header(out).startswith("▸ acme/api  ⚪ 2 other | "))
+
+    def test_filter_applies_to_summary(self):
+        st = state(prd=run(), dev=run(2, conclusion="failure"), collapsed=["acme/api"], filter="prd")
+        self.assertTrue(header(render(st)).startswith("▸ acme/api  🟢 1/1 | "))
+        st.filter = "dev"
+        self.assertTrue(header(render(st)).startswith("▸ acme/api  🔴 1 failed | "))
+
+    def test_filter_leaves_nothing(self):
+        cfg = Config([RepoConfig("acme/api", [Workflow("a.yaml", "prd", "A")])])
+        st = State(polling=True, filter="dev", collapsed=["acme/api"])
+        self.assertTrue(header(render(st, cfg)).startswith("▸ acme/api  no workflows in this view | "))
+        self.assertTrue(header(render(State(polling=True, filter="dev"), cfg)).startswith("▾ acme/api | "))
+
+    def test_collapsed_failure_still_turns_bar_red(self):
+        self.assertEqual(first(render(state(prd=run(conclusion="failure"), collapsed=["acme/api"]))), "🔴")
+        self.assertEqual(first(render(state(dev=run(conclusion="failure"), collapsed=["acme/api"]))), "🟠")
+        st = state(prd=run(status="in_progress", conclusion=None), collapsed=["acme/api"])
+        self.assertEqual(first(render(st)), "🟡")
+
+    def test_only_named_repo_collapses_and_separators_kept(self):
+        cfg = Config([RepoConfig("acme/api", [Workflow("a.yaml", "prd", "A")]),
+                      RepoConfig("acme/web", [Workflow("b.yaml", "prd", "B")])])
+        st = State(polling=True, collapsed=["acme/web", "gone/repo"],
+                   last={"acme/api/a.yaml": run(1).to_dict(), "acme/web/b.yaml": run(2).to_dict()})
+        out = render(st, cfg)
+        self.assertIn("▾ acme/api", out)
+        self.assertIn("▸ acme/web  🟢 1/1", out)
+        self.assertIn("A   ok", out)
+        self.assertNotIn("B   ok", out)
+        self.assertNotIn("gone/repo", out)
+        self.assertEqual(out.count("\n---\n"), 4)
+
+    def test_hostile_repo_name_cannot_inject_parameters(self):
+        for name in ("acme/ap'i param9=x", "acme/ap\nparam9=x", "acme/ap\rparam9=x"):
+            cfg = Config([RepoConfig(name, [Workflow("a.yaml", "prd", "A")])])
+            for collapsed in ([], [name]):
+                out = render_menu(cfg, State(polling=True, collapsed=collapsed), None, NOW, SCRIPT)
+                self.assertNotIn("param9", "\n".join(l.split(" | ", 1)[-1] for l in out.splitlines()
+                                                      if "toggle" in l))
+                self.assertNotIn("param1=toggle", out)
+                for l in out.splitlines():
+                    self.assertNotIn("'param9", l)
+                    self.assertFalse(l.startswith("param9"))
+        cfg = Config([RepoConfig("acme/a b param9=x", [Workflow("a.yaml", "prd", "A")])])
+        h = header(render_menu(cfg, State(polling=True), None, NOW, SCRIPT), "acme/a")
+        self.assertIn("param2=acme/a%20b%20param9=x terminal=false", h)
+        self.assertEqual(h.count("param2="), 1)
+        self.assertNotIn(" param3=", h)
+
+    def test_hostile_header_degrades_to_plain_line(self):
+        cfg = Config([RepoConfig("acme/ap'i", [Workflow("a.yaml", "prd", "A")])])
+        out = render_menu(cfg, State(polling=True, collapsed=["acme/ap'i"]), None, NOW, SCRIPT)
+        self.assertIn("▸ acme/api  ", out)
+        self.assertNotIn("param1=toggle", out)
+
+
 class SanitizeTests(unittest.TestCase):
     def test_sanitize(self):
         self.assertEqual(sanitize("a|b\nc\r\nd"), "a b c  d")

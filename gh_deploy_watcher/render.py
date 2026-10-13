@@ -115,6 +115,32 @@ def _workflow_lines(repo: str, wf: Workflow, entry: Optional[dict], now: datetim
     return lines, (wf.env, cls)
 
 
+def _summary(items: List[Tuple[str, str]]) -> str:
+    """Compact status of a collapsed repo's visible workflows, worst first."""
+    if not items:
+        return "no workflows in this view"
+    counts = {"failed": 0, "running": 0, "error": 0, "other": 0, "success": 0}
+    for _, cls in items:
+        counts[cls if cls in counts else "other"] += 1
+    if counts["success"] == len(items):
+        return "🟢 %d/%d" % (counts["success"], len(items))
+    parts = []
+    for cls, icon in (("failed", "🔴"), ("running", "🟡"), ("error", "⚠"), ("other", "⚪")):
+        if counts[cls]:
+            parts.append("%s %d %s" % (icon, counts[cls], cls))
+    if counts["success"]:
+        parts.append("🟢 %d" % counts["success"])
+    return " · ".join(parts)
+
+
+def _repo_header(repo: str, collapsed: bool, items: List[Tuple[str, str]], script: str) -> str:
+    text = "▸ %s  %s" % (sanitize(repo), _summary(items)) if collapsed else "▾ %s" % sanitize(repo)
+    try:
+        return "%s | %s" % (text, _action(script, "toggle", repo))
+    except ValueError:
+        return text  # unsafe repo name: no toggle action, keep the line
+
+
 def _open_config_line(config_path: Optional[Path]) -> Optional[str]:
     """The 'Open config' item, only when the file exists and the path is safe."""
     path = Path(config_path) if config_path else config_dir() / "config.json"
@@ -134,12 +160,18 @@ def render_menu(config: Config, state: State, error: Optional[str], now: datetim
     items: List[Tuple[str, str]] = []
     for repo in config.repos:
         visible = [w for w in repo.workflows if env_visible(w.env, state.filter)]
-        body.append(sanitize(repo.repo))
+        collapsed = repo.repo in state.collapsed
+        repo_items: List[Tuple[str, str]] = []
+        repo_lines: List[str] = []
         for wf in visible:
             lines, item = _workflow_lines(
                 repo.repo, wf, state.last.get(workflow_key(repo.repo, wf.file)), now, script_path)
-            body.extend(lines)
-            items.append(item)
+            repo_lines.extend(lines)
+            repo_items.append(item)
+        items.extend(repo_items)  # collapsed repos still count towards the bar icon
+        body.append(_repo_header(repo.repo, collapsed, repo_items, script_path))
+        if not collapsed:
+            body.extend(repo_lines)
         body.append("---")
     overall = overall_state(items, state.polling, error)
 

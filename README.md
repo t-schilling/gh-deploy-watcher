@@ -24,6 +24,8 @@ Clicking it opens a menu with, from top to bottom:
 5. One section per configured repo, for example `acme/api`, with one line per workflow: a status dot, the label, the status (`failed`, `running`, `ok`, `cancelled`, `skipped`, `unknown`), how long ago it started, and the run's PR or commit reference. Each has a submenu with `Open run` (opens the run in the browser) and, for failed runs, `Re-run failed jobs`.
 6. `Poll now`, `Add / remove repos…` (opens the selection window, see below) and `Open config`.
 
+Each repo header is a toggle: `▾ acme/api` is expanded, and clicking it collapses the repo to a single line such as `▸ acme/api  🔴 1 failed · 🟢 3` (or `🟢 4/4` when everything is green). The summary follows the current `View:` filter, a failure inside a collapsed repo still turns the menu bar icon red, and the choice is remembered in `state.json`.
+
 With no repos configured the menu says `No repos configured`.
 
 ## Requirements
@@ -66,7 +68,7 @@ If the installer cannot detect SwiftBar's folder the first time (SwiftBar not la
 - **Re-run failed jobs.** For a failed run, the submenu has `Re-run failed jobs`. For a `prd` workflow, a confirmation dialog first warns that this redeploys to production; Cancel is the default. For `dev` workflows there is no dialog.
 - **Notifications.** When a workflow's latest run newly fails, a macOS notification titled `Deploy failed: <label>` appears, once per run.
 - **Adding / removing repos.** `Add / remove repos…` runs `gh-deploy-watcher.1m.py ui`, which opens the selection window (see below). The terminal wizard (`./gh-deploy-watcher.1m.py setup`) is the alternative: add repos/workflows, remove repos/workflows, list config, done; changes are saved when you choose done.
-- **Where things live.** `~/.config/gh-deploy-watcher/` holds `config.json` (what to watch; see `config.example.json`), `state.json` (polling on/off, filter, cached results, notified runs) and `state.lock`. Set the environment variable `GH_DEPLOY_WATCHER_HOME` to use another directory.
+- **Where things live.** `~/.config/gh-deploy-watcher/` holds `config.json` (what to watch; see `config.example.json`), `state.json` (polling on/off, filter, collapsed repos, cached results, notified runs) and `state.lock`. Set the environment variable `GH_DEPLOY_WATCHER_HOME` to use another directory.
 
 Example `config.json`:
 
