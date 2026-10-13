@@ -104,17 +104,17 @@ def _prune_collapsed(names: List[str], config: Config, keep: Optional[str] = Non
 
 def _toggle(repo: str) -> None:
     """Flip one repo in state.collapsed under the lock, so no update is lost."""
-    try:
-        config: Optional[Config] = load_config()
-    except ConfigError:
-        config = None  # a broken config must not stop the user from collapsing
     with _locked():
+        try:
+            config: Optional[Config] = load_config()  # fresh, inside the lock
+        except ConfigError:
+            config = None  # a broken config must not stop the user from collapsing
         state = load_state()
         if repo in state.collapsed:
             state.collapsed.remove(repo)
         else:
             state.collapsed.append(repo)
-        if config is not None:
+        if config is not None and config.repos:  # an empty config must not wipe the list
             state.collapsed = _prune_collapsed(state.collapsed, config, keep=repo)
         save_state(state)
 
@@ -134,7 +134,8 @@ def _refresh(config: Config, runner: Runner, notify_fn: NotifyFn, now: float,
             if before.get(k) != v:
                 disk.last[k] = v
         disk.last_poll = now
-        disk.collapsed = _prune_collapsed(disk.collapsed, config)
+        if config.repos:  # an empty config (e.g. file briefly missing) must not wipe the list
+            disk.collapsed = _prune_collapsed(disk.collapsed, config)
         disk.notified.extend(i for i in state.notified if i not in disk.notified)
         for key in keys:
             run = _cached_run(state.last.get(key))

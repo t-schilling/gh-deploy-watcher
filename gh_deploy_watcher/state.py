@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 from gh_deploy_watcher.config import config_dir, valid_repo_name
 
 VALID_FILTERS = ("both", "prd", "dev")
+_COLLAPSED_CAP = 500
 _KEY_RE = re.compile(r"[0-9]+:[0-9]+")
 
 
@@ -61,8 +62,12 @@ def _parse(data: Any) -> State:
         state.notified = [k for k in (_notify_key(n) for n in notified) if k]
     collapsed = data.get("collapsed")
     if isinstance(collapsed, list):
+        seen = set()
         for name in collapsed:
-            if valid_repo_name(name) and name not in state.collapsed:
+            if len(state.collapsed) >= _COLLAPSED_CAP:
+                break
+            if valid_repo_name(name) and name not in seen:
+                seen.add(name)
                 state.collapsed.append(name)
     return state
 
