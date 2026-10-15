@@ -491,7 +491,7 @@ class FinalFixMainTests(ActionBase):
         self.assertEqual(self.main(["filter", "prd"], r), 0)
         self.assertEqual(load_state().filter, "prd")
         self.assertNotIn("Traceback", self.out.getvalue())
-        self.assertTrue(self.out.getvalue().startswith("\u26a0"))
+        self.assertTrue(self.out.getvalue().startswith("GH \u26a0"))
         self.assertEqual(r.calls, [])
 
     def test_error_menu_from_main_has_actions(self):
@@ -655,7 +655,7 @@ class ConcurrencyTests(ActionBase):
         with mock.patch.object(actions, "save_state", side_effect=PermissionError("denied")):
             rc = self.main([], FakeRunner(ids_from=3))
         self.assertEqual(rc, 0)
-        self.assertTrue(self.out.getvalue().startswith("\u26a0"))
+        self.assertTrue(self.out.getvalue().startswith("GH \u26a0"))
         self.assertIn("denied", self.out.getvalue())
         self.assertNotIn("Traceback", self.out.getvalue())
         self.assertEqual(self.notes.items, [])

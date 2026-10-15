@@ -362,7 +362,7 @@ class ErrorMenuActionsTests(unittest.TestCase):
             p = pathlib.Path(d) / "config.json"
             p.write_text("{bad")
             text = error_menu("bad | config", SCRIPT, p)
-        self.assertTrue(text.startswith("\u26a0\n---\n"))
+        self.assertTrue(text.startswith("GH \u26a0\n---\n"))
         for s in ("Add / remove repos", "param1=ui terminal=false", "Stop polling",
                   "param1=stop", "Open config", "bash=/usr/bin/open"):
             self.assertIn(s, text)
@@ -383,7 +383,7 @@ class ErrorMenuTests(unittest.TestCase):
     def test_error_menu_is_warning_without_actions(self):
         text = error_menu("bad | config\nline 'two'")
         lines = text.splitlines()
-        self.assertEqual(lines[0], "\u26a0")
+        self.assertEqual(lines[0], "GH \u26a0")
         self.assertEqual(lines[1], "---")
         self.assertEqual(len(lines), 3)
         self.assertNotIn("|", text)
