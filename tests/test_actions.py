@@ -296,6 +296,71 @@ class UiCommandTests(ActionBase):
         self.assertEqual(len(self.notes.items), 1)
 
 
+class RedrawThrottleTests(ActionBase):
+    def at(self, argv, runner, offset):
+        return actions.main(argv, script_path="/tmp/plugin.py", runner=runner,
+                            notify_fn=self.notes, confirm_fn=lambda m: True,
+                            now=NOW + offset, out=self.out)
+
+    def test_fresh_last_poll_makes_no_calls_and_no_error(self):
+        save_state(State(polling=True, last_poll=NOW))
+        r = FakeRunner(default=GhError("network", "no route"))
+        self.assertEqual(self.at([], r, 10), 0)
+        self.assertEqual(r.calls, [])
+        self.assertNotIn("no route", self.out.getvalue())
+        self.assertEqual(load_state().last_poll, NOW)
+
+    def test_old_or_missing_last_poll_polls_once(self):
+        for last in (None, NOW - 500):
+            save_state(State(polling=True, last_poll=last))
+            r = FakeRunner()
+            self.at([], r, 0)
+            self.assertEqual(len(r.calls), 4)
+
+    def test_just_under_interval_skips_and_at_interval_polls(self):
+        save_state(State(polling=True, last_poll=NOW))
+        r = FakeRunner()
+        self.at([], r, actions._MIN_POLL_INTERVAL - 0.5)
+        self.assertEqual(r.calls, [])
+        self.at([], r, actions._MIN_POLL_INTERVAL)
+        self.assertEqual(len(r.calls), 4)
+
+    def test_scheduled_run_60s_later_polls(self):
+        save_state(State(polling=True, last_poll=NOW))
+        r = FakeRunner()
+        self.at([], r, 60)
+        self.assertEqual(len(r.calls), 4)
+
+    def test_future_last_poll_polls(self):
+        save_state(State(polling=True, last_poll=NOW + 3600))
+        r = FakeRunner()
+        self.at([], r, 0)
+        self.assertEqual(len(r.calls), 4)
+        self.assertEqual(load_state().last_poll, NOW)
+
+    def test_polling_off_never_polls(self):
+        save_state(State(polling=False, last_poll=None))
+        r = FakeRunner()
+        self.at([], r, 0)
+        self.assertEqual(r.calls, [])
+
+    def test_refresh_and_start_always_poll(self):
+        save_state(State(polling=True, last_poll=NOW))
+        r = FakeRunner()
+        self.at(["refresh"], r, 1)
+        self.assertEqual(len(r.calls), 4)
+        self.at(["start"], r, 2)
+        self.assertEqual(len(r.calls), 8)
+
+    def test_filter_then_redraw_polls_once(self):
+        save_state(State(polling=True, last_poll=NOW - 500))
+        r = FakeRunner()
+        self.at(["filter", "dev"], r, 0)
+        self.at([], r, 1)
+        self.assertEqual(r.list_calls(), [("acme/api", "deploy-dev.yaml"),
+                                          ("acme/web", "deploy-dev.yaml")])
+
+
 class MainTests(ActionBase):
     def test_polling_off_zero_calls_and_renders(self):
         r = FakeRunner()
