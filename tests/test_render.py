@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 from gh_deploy_watcher.config import Config, RepoConfig, Workflow
 from gh_deploy_watcher.model import Run
-from gh_deploy_watcher.render import error_menu, render_menu, sanitize
+from gh_deploy_watcher.render import _ICONS, error_menu, render_menu, sanitize
 from gh_deploy_watcher.state import State
 
 NOW = datetime(2026, 10, 9, 12, 0, 0, tzinfo=timezone.utc)
@@ -45,26 +45,42 @@ class IconTests(unittest.TestCase):
     def test_paused(self):
         st = state(prd=run())
         st.polling = False
-        self.assertEqual(first(render(st)), "⏸")
+        self.assertEqual(first(render(st)), "GH ⏸")
 
     def test_error(self):
-        self.assertEqual(first(render(state(), error="no network")), "⚠")
+        self.assertEqual(first(render(state(), error="no network")), "GH ⚠")
         self.assertIn("no network", render(state(), error="no network"))
 
     def test_prd_failed(self):
-        self.assertEqual(first(render(state(prd=run(conclusion="failure")))), "🔴")
+        self.assertEqual(first(render(state(prd=run(conclusion="failure")))), "GH 🔴")
 
     def test_dev_failed(self):
-        self.assertEqual(first(render(state(dev=run(conclusion="failure")))), "🟠")
+        self.assertEqual(first(render(state(dev=run(conclusion="failure")))), "GH 🟠")
 
     def test_running(self):
-        self.assertEqual(first(render(state(prd=run(status="in_progress", conclusion=None)))), "🟡")
+        self.assertEqual(first(render(state(prd=run(status="in_progress", conclusion=None)))), "GH 🟡")
 
     def test_ok(self):
-        self.assertEqual(first(render(state(prd=run(), dev=run(2)))), "🟢")
+        self.assertEqual(first(render(state(prd=run(), dev=run(2)))), "GH 🟢")
 
     def test_header_separator(self):
         self.assertEqual(render(state()).splitlines()[1], "---")
+
+
+class TitleTests(unittest.TestCase):
+    def test_every_state_renders_gh_title(self):
+        cases = {
+            "prd_failed": lambda: render(state(prd=run(conclusion="failure"))),
+            "dev_failed": lambda: render(state(dev=run(conclusion="failure"))),
+            "running": lambda: render(state(prd=run(status="in_progress", conclusion=None))),
+            "ok": lambda: render(state(prd=run(), dev=run(2))),
+            "paused": lambda: render(State(polling=False)),
+            "error": lambda: error_menu("x"),
+        }
+        self.assertEqual(set(cases), set(_ICONS))
+        for key, make in cases.items():
+            with self.subTest(key):
+                self.assertEqual(first(make()), "GH " + _ICONS[key])
 
 
 class MenuTests(unittest.TestCase):
@@ -130,7 +146,7 @@ class MenuTests(unittest.TestCase):
         for st in (state(), state(prd={"run": None}, dev={"run": None})):
             out = render(st)
             self.assertEqual(out.count("no runs yet"), 2)
-            self.assertEqual(first(out), "🟢")
+            self.assertEqual(first(out), "GH 🟢")
 
     def test_unreadable(self):
         bad = [{"id": 1}, {"id": "x", "status": "s", "created_at": "c", "title": "t",
@@ -140,7 +156,7 @@ class MenuTests(unittest.TestCase):
             self.assertIn("unreadable", out)
             self.assertNotIn("Re-run", out)
             self.assertIn("DEV · EU", out)
-            self.assertEqual(first(out), "🟢")
+            self.assertEqual(first(out), "GH 🟢")
 
     def test_malformed_date_unreadable(self):
         r = run().to_dict()
@@ -151,19 +167,19 @@ class MenuTests(unittest.TestCase):
     def test_error_entry_only_that_workflow(self):
         out = render(state(prd={"error": "repo not found"}, dev=run(2)))
         self.assertEqual(out.count("repo not found"), 1)
-        self.assertEqual(first(out), "⚠")
+        self.assertEqual(first(out), "GH ⚠")
         self.assertIn("DEV · EU", out)
         self.assertEqual(out.count("repo not found"), 1)
 
     def test_error_entry_with_known_failure_keeps_red(self):
         out = render(state(prd={"error": "x"}, dev=run(2, conclusion="failure")))
-        self.assertEqual(first(out), "🟠")
+        self.assertEqual(first(out), "GH 🟠")
         out = render(state(prd=run(2, conclusion="failure"), dev={"error": "x"}))
-        self.assertEqual(first(out), "🔴")
+        self.assertEqual(first(out), "GH 🔴")
 
     def test_error_entry_never_green_or_yellow(self):
         out = render(state(prd={"error": "x"}, dev=run(2, status="in_progress", conclusion=None)))
-        self.assertEqual(first(out), "⚠")
+        self.assertEqual(first(out), "GH ⚠")
 
     def test_error_entry_other_repo_unaffected(self):
         cfg = Config([RepoConfig("acme/api", [Workflow("a.yaml", "prd", "A")]),
@@ -203,7 +219,7 @@ class RobustnessTests(unittest.TestCase):
             out = render(st)
             self.assertIn("unreadable", out, bad)
             self.assertIn("DEV · EU", out)
-            self.assertEqual(first(out), "🟢")
+            self.assertEqual(first(out), "GH 🟢")
 
     def test_quote_in_repo_degrades_one_workflow(self):
         cfg = Config([RepoConfig("acme/ap'i", [Workflow("a.yaml", "prd", "A")]),
@@ -212,7 +228,7 @@ class RobustnessTests(unittest.TestCase):
             "acme/ap'i/a.yaml": run(5, conclusion="failure").to_dict(),
             "acme/web/b.yaml": run(6, conclusion="failure").to_dict()})
         out = render(st, cfg)
-        self.assertEqual(first(out), "🔴")
+        self.assertEqual(first(out), "GH 🔴")
         self.assertIn("failed", out)
         self.assertEqual(out.count("Re-run failed jobs"), 1)
         self.assertIn("param2=acme/web", out)
@@ -242,7 +258,7 @@ class CollapseTests(unittest.TestCase):
         self.assertIn("param1=toggle param2=acme/api", header(out))
         self.assertNotIn("PRD · EU", out)
         self.assertNotIn("Open run", out)
-        self.assertEqual(first(out), "🟢")
+        self.assertEqual(first(out), "GH 🟢")
 
     def test_collapsed_failing(self):
         st = state(prd=run(conclusion="failure"), dev=run(2), collapsed=["acme/api"])
@@ -291,10 +307,10 @@ class CollapseTests(unittest.TestCase):
         self.assertTrue(header(render(State(polling=True, filter="dev"), cfg)).startswith("▾ acme/api | "))
 
     def test_collapsed_failure_still_turns_bar_red(self):
-        self.assertEqual(first(render(state(prd=run(conclusion="failure"), collapsed=["acme/api"]))), "🔴")
-        self.assertEqual(first(render(state(dev=run(conclusion="failure"), collapsed=["acme/api"]))), "🟠")
+        self.assertEqual(first(render(state(prd=run(conclusion="failure"), collapsed=["acme/api"]))), "GH 🔴")
+        self.assertEqual(first(render(state(dev=run(conclusion="failure"), collapsed=["acme/api"]))), "GH 🟠")
         st = state(prd=run(status="in_progress", conclusion=None), collapsed=["acme/api"])
-        self.assertEqual(first(render(st)), "🟡")
+        self.assertEqual(first(render(st)), "GH 🟡")
 
     def test_only_named_repo_collapses_and_separators_kept(self):
         cfg = Config([RepoConfig("acme/api", [Workflow("a.yaml", "prd", "A")]),
@@ -360,7 +376,7 @@ class ErrorMenuActionsTests(unittest.TestCase):
 
     def test_quote_in_script_path_degrades_to_plain_menu(self):
         text = error_menu("x", "/tmp/it's/x.py", None)
-        self.assertEqual(text.splitlines(), ["\u26a0", "---", "x"])
+        self.assertEqual(text.splitlines(), ["GH \u26a0", "---", "x"])
 
 
 class ErrorMenuTests(unittest.TestCase):
