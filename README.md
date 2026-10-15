@@ -2,7 +2,7 @@
 
 A macOS menu bar tool that watches the GitHub Actions deploy workflows you choose and shows their latest status at a glance. It is a [SwiftBar](https://swiftbar.app) plugin written in Python 3.9+ (standard library only) that polls through your existing `gh` login. It notifies you when a deploy fails and can re-run the failed jobs from the menu.
 
-> **Note: this is NOT a `gh` extension.** Despite the `gh-` prefix, it is not installed with `gh extension install` and `gh deploy-watcher` does not exist. It is a SwiftBar plugin; it only calls `gh` to talk to GitHub.
+> **Note: this is NOT a `gh` extension.** Despite the `gh-` prefix, it is not installed with `gh extension install` and `gh deploy-watcher` does not exist. It is a SwiftBar plugin; it reaches GitHub only through the `gh` CLI (the local selection window also runs a small server on your machine, see Security and privacy).
 
 ## What the menu looks like
 
@@ -62,7 +62,7 @@ If the installer cannot detect SwiftBar's folder the first time (SwiftBar not la
 
 ## Usage
 
-- **Start / stop polling.** `Start polling` takes a baseline (failures that already exist do not notify) and then the plugin refreshes about once a minute (the `1m` in the filename). `Stop polling` pauses it; the icon becomes the pause symbol.
+- **Start / stop polling.** `Start polling` takes a baseline (failures that already exist do not notify) and then the plugin polls about once a minute (the `1m` in the filename). `Stop polling` pauses it; the title becomes `GH ⏸`. Redrawing the menu after a click (collapsing a repo, changing the `View:` filter) does not poll again when the last poll is under 45 s old, so those clicks are instant.
 - **Filter.** `View:` switches between `Both`, `PRD only` and `DEV only`. Hidden environments are not polled.
 - **Poll now.** Refreshes immediately.
 - **Re-run failed jobs.** For a failed run, the submenu has `Re-run failed jobs`. For a `prd` workflow, a confirmation dialog first warns that this redeploys to production; Cancel is the default. For `dev` workflows there is no dialog.
@@ -90,7 +90,7 @@ Example `config.json`:
 
 `Add / remove repos…` starts a small local web server bound to `127.0.0.1` and shows its page (the selection UI) in a window. The window is a native macOS app (`build/GhDeployWatcher.app`, a `WKWebView` shell that holds no logic of its own, see `ui-shell/README.md`). `./install.sh` builds it locally with `ui-shell/build.sh` when `swift` and the macOS SDK (`xcrun --show-sdk-path`) are available, and only when the app is missing or older than a file under `ui-shell/`. The installer summary reports `window: built`, `window: already built` or `window: skipped` (with the reason).
 
-- **Browser fallback.** If the window was not built, cannot start, or exits right away, the same page opens in your default browser instead. If even that fails, the URL is printed to the terminal. Nothing else changes; the window is optional.
+- **Browser fallback.** If the window is not built, cannot start, or exits right away, the same page opens in your default browser instead. The browser session ends when you press Done or Cancel, when you close the tab with no unsaved changes, or after about 3 minutes with no open page; the page then says `Session ended`. If even the browser cannot be opened, you get a notification telling you to run `./gh-deploy-watcher.1m.py ui` in a terminal, which prints the URL. Nothing else changes; the window is optional.
 - **Terminal fallback.** `./gh-deploy-watcher.1m.py setup` runs the terminal wizard without any window or browser.
 - **Skip the window.** `./install.sh --no-window` does not build it. A failed build never fails the install; it prints a note that the page will open in the browser.
 - **Rebuild.** Run `bash ui-shell/build.sh` (it needs only the Command Line Tools and writes `build/GhDeployWatcher.app`), or just re-run `./install.sh`, which rebuilds when `ui-shell/` has changed. `GH_DEPLOY_WATCHER_BUILD_DIR` overrides the output folder of `build.sh`; the launcher and `install.sh` honor the same variable and otherwise look in `build/`.
