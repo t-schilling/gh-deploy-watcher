@@ -19,6 +19,13 @@ _ICONS = {
     "paused": "⏸",
     "error": "⚠",
 }
+
+
+def _title(state_key: str) -> str:
+    """Menu bar title line: 'GH' plus the state icon (no SwiftBar parameters)."""
+    return "GH " + _ICONS[state_key]
+
+
 _CLASS_ICONS = {
     "failed": "🔴",
     "running": "🟡",
@@ -175,7 +182,7 @@ def render_menu(config: Config, state: State, error: Optional[str], now: datetim
         body.append("---")
     overall = overall_state(items, state.polling, error)
 
-    out = [_ICONS[overall], "---"]
+    out = [_title(overall), "---"]
     if error:
         out.append("⚠ %s | color=red" % sanitize(error))
     if state.polling:
@@ -207,7 +214,7 @@ def error_menu(reason: str, script_path: Optional[str] = None,
     With script_path it also offers the actions that let the user recover
     without a terminal; an unsafe script path degrades to the plain menu.
     """
-    lines = [_ICONS["error"], "---", sanitize(reason)]
+    lines = [_title("error"), "---", sanitize(reason)]
     if script_path:
         try:
             extra = [

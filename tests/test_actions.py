@@ -366,7 +366,7 @@ class MainTests(ActionBase):
         r = FakeRunner()
         self.assertEqual(self.main([], r), 0)
         self.assertEqual(r.calls, [])
-        self.assertTrue(self.out.getvalue().startswith("⏸"))
+        self.assertTrue(self.out.getvalue().startswith("GH ⏸"))
 
     def test_polling_on_polls_notifies_once(self):
         save_state(State(polling=True))
@@ -391,7 +391,7 @@ class MainTests(ActionBase):
         r = FakeRunner()
         self.assertEqual(self.main([], r), 0)
         text = self.out.getvalue()
-        self.assertTrue(text.startswith("⚠"))
+        self.assertTrue(text.startswith("GH ⚠"))
         self.assertIn("not valid JSON", text)
         self.assertEqual(r.calls, [])
 
@@ -403,7 +403,7 @@ class MainTests(ActionBase):
         save_state(State(polling=True))
         r = FakeRunner(default=GhError("auth", "please log in"))
         self.main([], r)
-        self.assertTrue(self.out.getvalue().startswith("⚠"))
+        self.assertTrue(self.out.getvalue().startswith("GH ⚠"))
         self.assertIn("please log in", self.out.getvalue())
 
     def test_start_baseline_then_new_failure_notifies(self):
@@ -491,7 +491,7 @@ class FinalFixMainTests(ActionBase):
         self.assertEqual(self.main(["filter", "prd"], r), 0)
         self.assertEqual(load_state().filter, "prd")
         self.assertNotIn("Traceback", self.out.getvalue())
-        self.assertTrue(self.out.getvalue().startswith("\u26a0"))
+        self.assertTrue(self.out.getvalue().startswith("GH \u26a0"))
         self.assertEqual(r.calls, [])
 
     def test_error_menu_from_main_has_actions(self):
@@ -655,7 +655,7 @@ class ConcurrencyTests(ActionBase):
         with mock.patch.object(actions, "save_state", side_effect=PermissionError("denied")):
             rc = self.main([], FakeRunner(ids_from=3))
         self.assertEqual(rc, 0)
-        self.assertTrue(self.out.getvalue().startswith("\u26a0"))
+        self.assertTrue(self.out.getvalue().startswith("GH \u26a0"))
         self.assertIn("denied", self.out.getvalue())
         self.assertNotIn("Traceback", self.out.getvalue())
         self.assertEqual(self.notes.items, [])

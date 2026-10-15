@@ -6,7 +6,7 @@ A macOS menu bar tool that watches the GitHub Actions deploy workflows you choos
 
 ## What the menu looks like
 
-The menu bar shows one icon for the overall state:
+The menu bar shows `GH` followed by one icon for the overall state (for example `GH 🟢`):
 
 - red: a PRD workflow's latest run failed
 - orange: a DEV workflow's latest run failed (and no PRD failure)

@@ -35,14 +35,14 @@ class EntrypointTests(unittest.TestCase):
         (self.home / "config.json").write_text("{not json")
         r = self.run_plugin(self.plugin_dir())
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertTrue(r.stdout.startswith("\u26a0"), r.stdout)
+        self.assertTrue(r.stdout.startswith("GH \u26a0"), r.stdout)
         self.assertIn("not valid JSON", r.stdout)
         self.assertNotIn("Traceback", r.stdout + r.stderr)
 
     def test_paused_with_no_config_renders_menu(self):
         r = self.run_plugin(self.plugin_dir())
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertTrue(r.stdout.startswith("\u23f8"), r.stdout)
+        self.assertTrue(r.stdout.startswith("GH \u23f8"), r.stdout)
 
     def test_real_import_error_in_actions_propagates(self):
         d = self.plugin_dir()
@@ -80,7 +80,7 @@ class EntrypointTests(unittest.TestCase):
         r = subprocess.run([sys.executable, str(d / "gh-deploy-watcher.1m.py")], env=env,
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertTrue(r.stdout.startswith("\u26a0"), r.stdout)  # offline: global warning
+        self.assertTrue(r.stdout.startswith("GH \u26a0"), r.stdout)  # offline: global warning
         self.assertIn("failed", r.stdout)  # cached red run still listed
         self.assertNotIn("Traceback", r.stderr)
         self.assertIn("5", json.loads((self.home / "state.json").read_text())["last"]
@@ -89,7 +89,7 @@ class EntrypointTests(unittest.TestCase):
     def test_apostrophe_in_path_gives_warning_menu(self):
         r = self.run_plugin(self.plugin_dir("it's here"))
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertTrue(r.stdout.startswith("\u26a0"), r.stdout)
+        self.assertTrue(r.stdout.startswith("GH \u26a0"), r.stdout)
         self.assertNotIn("Traceback", r.stdout + r.stderr)
 
 
