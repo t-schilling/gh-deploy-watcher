@@ -112,6 +112,23 @@ class CssTests(unittest.TestCase):
     def test_focus_visible(self):
         self.assertIn(":focus-visible", read("app.css"))
 
+    def test_compact_floating_footer(self):
+        css = read("app.css")
+        m = re.search(r"footer\.glass\s*\{([^}]*)\}", css)
+        self.assertIsNotNone(m)
+        rule = m.group(1)
+        self.assertNotIn("min(860px", rule)
+        self.assertNotIn("translateX(-50%)", rule)
+        self.assertRegex(rule, r"right:\s*22px")
+        self.assertRegex(css, r"#summary:empty\s*\{\s*display:\s*none")
+
+    def test_footer_markup(self):
+        html = read("index.html")
+        for ident in ("cancel", "save", "done"):
+            self.assertRegex(html, r'id="%s"' % ident)
+        self.assertRegex(html, r'id="summary"[^>]*role="status"')
+        self.assertRegex(html, r'id="summary"[^>]*aria-live')
+
 
 class ServedTests(unittest.TestCase):
     def setUp(self):

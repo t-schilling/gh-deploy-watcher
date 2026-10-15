@@ -328,7 +328,7 @@
     var box = $("summary");
     clear(box);
     if (changed) { summaryNodes(diff).forEach(function (n) { box.appendChild(typeof n === "string" ? document.createTextNode(n) : n); }); }
-    else { box.textContent = state.saved ? "Saved" : "No changes yet"; }
+    else if (state.saved) { box.textContent = "Saved"; }  // otherwise empty: #summary:empty is hidden
     updateButtons(changed);
   }
 
