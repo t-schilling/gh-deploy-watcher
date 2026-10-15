@@ -21,6 +21,10 @@ from gh_deploy_watcher.state import VALID_FILTERS, State, load_state, save_state
 _GLOBAL_KINDS = ("auth", "missing", "network", "rate_limit")
 _NOTIFIED_CAP = 200
 _MAX_POLL_SECONDS = 45.0
+# A redraw polls only if the last poll is at least this old. SwiftBar runs every 60 s, so
+# 45 s leaves 15 s of jitter before a scheduled run could be skipped; redraws after a click
+# (toggle, filter) land within seconds of a poll and just render the cached state.
+_MIN_POLL_INTERVAL = 45.0
 _REPO_RE = re.compile(r"(?!\.{1,2}/)[A-Za-z0-9_.][A-Za-z0-9_.-]*/(?!\.{1,2}$)[A-Za-z0-9_.][A-Za-z0-9_.-]*")
 
 NotifyFn = Callable[[str, str], None]
@@ -231,14 +235,21 @@ def _ui(notify_fn: NotifyFn) -> int:
             lock.close()
 
 
+def _poll_due(state: State, now: float) -> bool:
+    """True if a redraw should poll; a last_poll in the future (clock skew) counts as due."""
+    last = state.last_poll
+    return last is None or now < last or now - last >= _MIN_POLL_INTERVAL
+
+
 def _dispatch(argv: List[str], script: str, runner: Runner, notify_fn: NotifyFn,
               confirm_fn: ConfirmFn, ts: float, out: TextIO) -> int:
     if not argv:
         config = load_config()
         error = None
-        if load_state().polling:
-            error = _refresh(config, runner, notify_fn, ts)
         state = load_state()
+        if state.polling and _poll_due(state, ts):
+            error = _refresh(config, runner, notify_fn, ts)
+            state = load_state()
         out.write(render_menu(config, state, error, datetime.fromtimestamp(ts, timezone.utc), script))
         return 0
     cmd, args = argv[0], argv[1:]
