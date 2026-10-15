@@ -413,7 +413,8 @@ class MainTests(ActionBase):
         self.assertEqual(self.notes.items, [])
         self.assertTrue(load_state().polling)
         r2 = FakeRunner(ids_from=10)
-        self.main([], r2)
+        actions.main([], script_path="/tmp/plugin.py", runner=r2, notify_fn=self.notes,
+                     confirm_fn=lambda m: True, now=NOW + 60, out=self.out)  # next scheduled run
         self.assertEqual(len(self.notes.items), 4)
 
     def test_stop_no_calls(self):
@@ -455,8 +456,12 @@ class RerunAttemptTests(ActionBase):
         save_state(State(polling=True, filter="prd"))
         one = Config([RepoConfig("acme/api", [Workflow("deploy-prd.yaml", "prd", "PRD")])])
         save_config(one)
-        def go(res):
-            self.main([], FakeRunner(default=res))
+        tick = [0]
+        def go(res):  # one scheduled run per call, 60 s apart
+            actions.main([], script_path="/tmp/plugin.py", runner=FakeRunner(default=res),
+                         notify_fn=self.notes, confirm_fn=lambda m: True,
+                         now=NOW + 60 * tick[0], out=self.out)
+            tick[0] += 1
         go(run_json(222, "failure", attempt=1))
         self.assertEqual(len(self.notes.items), 1)
         go(run_json(222, "failure", attempt=1))
